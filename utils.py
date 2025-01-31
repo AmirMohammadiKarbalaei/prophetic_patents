@@ -1,12 +1,6 @@
-import nltk
-from nltk import pos_tag, word_tokenize
 import re
-
-nltk.download("averaged_perceptron_tagger")
-nltk.download("punkt")
-
-
 from bs4 import BeautifulSoup
+from lxml import etree
 
 
 def extract_experiments_w_heading(text):
@@ -20,8 +14,8 @@ def extract_experiments_w_heading(text):
         lambda tag: tag.name == "heading"
         and (
             "EXAMPLES" in tag.text.upper()
-            or "EXAMPLE" in tag.text.upper()
-            or "EXPERIMENT" in tag.text.upper()
+            or "EXAMPLE" == tag.text.upper()
+            or "EXPERIMENT" == tag.text.upper()
             or "EXPERIMENTS" in tag.text.upper()
         )
     )
@@ -30,36 +24,15 @@ def extract_experiments_w_heading(text):
         return None
 
     # Extract everything after the 'EXAMPLES' heading until the next major section
-    experiments = []
-    for sibling in examples_heading.find_next_siblings():
-        if (
-            sibling.name == "heading" and sibling["level"] == "1"
-        ):  # Stop at the next main section
-            break
-        experiments.append(sibling.text)
+    # experiments = []
+    # for sibling in examples_heading.find_next_siblings():
+    #     if (
+    #         sibling.name == "heading" and sibling["level"] == "1"
+    #     ):  # Stop at the next main section
+    #         break
+    #     experiments.append(sibling.text)
 
-    return "\n".join(experiments)
-
-
-def check_tense_nltk(sentence):
-    words = word_tokenize(sentence)
-    tagged = pos_tag(words)
-
-    past = ["VBD", "VBN"]
-    present = ["VB", "VBG", "VBP", "VBZ"]
-    future = ["MD"]
-
-    tenses = {"past": 0, "present": 0, "future": 0}
-
-    for word, tag in tagged:
-        if tag in past:
-            tenses["past"] += 1
-        elif tag in present:
-            tenses["present"] += 1
-        elif tag in future and word.lower() in ["will", "shall"]:
-            tenses["future"] += 1
-
-    return max(tenses, key=tenses.get) if max(tenses.values()) > 0 else "Unknown"
+    return examples_heading  # "\n".join(experiments)
 
 
 # Test the function
@@ -81,3 +54,42 @@ def extract_all_examples(text):
         examples[title] = description
 
     return examples
+
+
+def find_doc_number(xml_part):
+    parser = etree.XMLParser(recover=True)
+    root = etree.fromstring(xml_part.encode(), parser)
+    doc_num = root.xpath("//publication-reference//document-id//doc-number/text()")
+    return doc_num
+
+
+def clean_text(text):
+    """
+    Clean text by removing special characters, extra spaces, and normalizing content
+
+    Args:
+        text (str): Input text to clean
+
+    Returns:
+        str: Cleaned text
+    """
+    if not isinstance(text, str):
+        return ""
+
+    # Remove HTML tags if present
+    text = BeautifulSoup(text, "html.parser").get_text()
+
+    # Replace newlines, tabs, and multiple spaces
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[\n\t\r]", " ", text)
+
+    # Remove special characters but keep important punctuation
+    text = re.sub(r"[^a-zA-Z0-9\s\.\,\?\!\-\']", "", text)
+
+    # Remove extra spaces around punctuation
+    text = re.sub(r"\s*([\.!?,])\s*", r"\1 ", text)
+
+    # Remove multiple spaces and strip
+    text = " ".join(text.split())
+
+    return text.strip()
