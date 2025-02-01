@@ -2,6 +2,7 @@ import re
 from bs4 import BeautifulSoup
 from lxml import etree
 import json
+from collections import defaultdict
 
 
 def save_as_json(examples, filename="1200_patents_w_experiments.json"):
@@ -69,6 +70,7 @@ def extract_experiments_w_heading(text):
     return examples_headings
 
 
+"""7824"""
 # def extract_experiments_w_heading(text):
 #     """Extracts the 'Examples' section and its experiments from a patent text."""
 
@@ -274,3 +276,47 @@ def clean_text(text):
     text = " ".join(text.split())
 
     return text.strip()
+
+
+def remove_duplicate_docs(xml_parts):
+    """
+    Remove duplicate documents keeping only the longest version.
+
+    Args:
+        xml_parts (list): List of XML documents
+
+    Returns:
+        list: XML documents with duplicates removed
+    """
+    # Create dictionaries to store document numbers and details
+    doc_versions = defaultdict(list)
+    doc_lengths = {}
+
+    # Collect all document numbers with positions and lengths
+    for i, xml in enumerate(xml_parts[1:], start=1):
+        doc_num = find_doc_number(xml)[0]
+        doc_versions[doc_num].append(i)
+        doc_lengths[i] = len(xml)
+
+    # Find documents with multiple versions
+    duplicate_docs = {
+        doc_num: positions
+        for doc_num, positions in doc_versions.items()
+        if len(positions) > 1
+    }
+
+    # Remove shorter versions
+    indices_to_remove = []
+    for doc_num, positions in duplicate_docs.items():
+        longest_pos = max(positions, key=lambda pos: doc_lengths[pos])
+        indices_to_remove.extend([pos for pos in positions if pos != longest_pos])
+
+    # Sort indices in reverse order to remove from end first
+    indices_to_remove.sort(reverse=True)
+
+    # Create new list without duplicates
+    cleaned_parts = xml_parts.copy()
+    for idx in indices_to_remove:
+        cleaned_parts.pop(idx)
+
+    return cleaned_parts
