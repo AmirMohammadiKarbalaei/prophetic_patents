@@ -3,3 +3,4 @@ patents_data
 __pycache__
 patent_experiments.csv
 g_detail_desc_text_1997.tsv
+test
