@@ -1,38 +1,219 @@
 import re
 from bs4 import BeautifulSoup
 from lxml import etree
+import json
+
+
+def save_as_json(examples, filename="1200_patents_w_experiments.json"):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(examples, f, indent=4, ensure_ascii=False)
+    print(f"Saved as {filename}")
+
+
+def extract_num_dot_examples(text):
+    soup = BeautifulSoup(text, "html.parser")
+
+    examples = {}
+    current_heading = None
+    current_text = []
+
+    elements = soup.find_all(["heading", "p"])
+
+    for element in elements:
+        text = element.text.strip()
+
+        # Check if the paragraph starts with a numbered section (e.g., "1. ", "2. ")
+        if re.match(r"^\d+\.\s+", text):
+            # Save previous section
+            if current_heading:
+                examples[current_heading] = " ".join(current_text)
+
+            # Start a new section with this as the heading
+            current_heading = f"Example {len(examples) + 1}: {text}"
+            current_text = []
+        else:
+            # Add paragraph content to the current section
+            current_text.append(text)
+
+    # Add last section if exists
+    if current_heading:
+        examples[current_heading] = " ".join(current_text)
+
+    return examples
 
 
 def extract_experiments_w_heading(text):
-    """Extracts the 'Examples' section and its experiments from a patent text."""
+    """Extracts all 'Examples/Experiments' sections from a patent text."""
 
-    # Use BeautifulSoup to parse the structure (for HTML-like patents)
+    # Use BeautifulSoup to parse the structure
     soup = BeautifulSoup(text, "html.parser")
 
-    # Find the "EXAMPLES" section heading
-    examples_heading = soup.find(
+    # Find all "EXAMPLES/EXPERIMENTS" section headings
+    examples_headings = soup.findAll(
         lambda tag: tag.name == "heading"
-        and (
-            "EXAMPLES" in tag.text.upper()
-            or "EXAMPLE" == tag.text.upper()
-            or "EXPERIMENT" == tag.text.upper()
-            or "EXPERIMENTS" in tag.text.upper()
+        and any(
+            keyword in tag.text.upper().replace(" ", "")
+            for keyword in [
+                "EXAMPLES",
+                # "EXAMPLE",
+                # "EXPERIMENT",
+                "EXPERIMENTS",
+                "Tests",
+            ]
         )
     )
-    if not examples_heading:
-        # print("No 'Examples' section found.")
+
+    if not examples_headings:
         return None
 
-    # Extract everything after the 'EXAMPLES' heading until the next major section
-    # experiments = []
-    # for sibling in examples_heading.find_next_siblings():
-    #     if (
-    #         sibling.name == "heading" and sibling["level"] == "1"
-    #     ):  # Stop at the next main section
-    #         break
-    #     experiments.append(sibling.text)
+    return examples_headings
 
-    return examples_heading  # "\n".join(experiments)
+
+# def extract_experiments_w_heading(text):
+#     """Extracts the 'Examples' section and its experiments from a patent text."""
+
+#     # Use BeautifulSoup to parse the structure (for HTML-like patents)
+#     soup = BeautifulSoup(text, "html.parser")
+
+#     # Find the "EXAMPLES" section heading
+#     examples_heading = soup.find(
+#         lambda tag: tag.name == "heading"
+#         and (
+#             "EXAMPLES" in tag.text.upper()
+#             or "EXAMPLE" == tag.text.upper()
+#             or "EXPERIMENT" == tag.text.upper()
+#             or "EXPERIMENTS" in tag.text.upper()
+#         )
+#     )
+#     if not examples_heading:
+#         # print("No 'Examples' section found.")
+#         return None
+
+#     # Extract everything after the 'EXAMPLES' heading until the next major section
+#     # experiments = []
+#     # for sibling in examples_heading.find_next_siblings():
+#     #     if (
+#     #         sibling.name == "heading" and sibling["level"] == "1"
+#     #     ):  # Stop at the next main section
+#     #         break
+#     #     experiments.append(sibling.text)
+
+#     return examples_heading  # "\n".join(experiments)
+
+
+def extract_examples_start_w_word(siblings):
+    examples = []
+    current_example = None
+    in_example = False
+
+    for tag in siblings:
+        if tag.name == "heading":
+            if (
+                tag.text.strip().lower().startswith("example")
+                or tag.text.strip().lower().startswith("experiment")
+                or tag.text.strip().lower().startswith("test")
+            ):
+                in_example = True
+                current_example = {
+                    "number": tag.text.strip(),
+                    "title": siblings[siblings.index(tag) + 1].text.strip(),
+                    "content": [],
+                }
+                examples.append(current_example)
+            else:
+                # If we hit any other heading, stop collecting content
+                in_example = False
+        elif in_example and tag.name == "p" and current_example is not None:
+            current_example["content"].append(tag.text.strip())
+
+    return examples
+
+
+def extract_examples_w_word(text):
+    """Find all example/experiment/test sections and extract their content"""
+    soup = BeautifulSoup(text, "html.parser")
+    examples = []
+
+    # Find all matching headings
+    example_headings = soup.findAll(
+        lambda tag: tag.name == "heading"
+        and any(
+            keyword in tag.text.strip().lower()
+            for keyword in ["example", "experiment", "test"]
+        )
+    )
+
+    for heading in example_headings:
+        current_content = []
+        next_sibling = heading.find_next_sibling()
+
+        # Get title from next heading
+        title = (
+            next_sibling.text.strip()
+            if next_sibling and next_sibling.name == "heading"
+            else ""
+        )
+
+        # Collect content until next example/section heading
+        sibling = next_sibling
+        while sibling and not (
+            sibling.name == "heading"
+            and any(
+                keyword in sibling.text.strip().lower().replace(" ", "")
+                for keyword in ["example", "experiment", "test"]
+            )
+        ):
+            if sibling.name == "p":
+                current_content.append(sibling.text.strip())
+            sibling = sibling.find_next_sibling()
+
+        examples.append(
+            {"number": heading.text.strip(), "title": title, "content": current_content}
+        )
+
+    return examples if examples else None
+
+
+def process_siblings(siblings):
+    examples = []
+
+    # Find all matching headings directly from siblings
+    example_headings = [
+        tag
+        for tag in siblings
+        if tag.name == "heading"
+        and any(
+            keyword in tag.text.strip().lower().replace(" ", "")
+            for keyword in ["example", "experiment", "test"]
+        )
+    ]
+
+    for heading in example_headings:
+        current_content = []
+        idx = siblings.index(heading)
+
+        # Get title from next heading if available
+        title = ""
+        if idx + 1 < len(siblings) and siblings[idx + 1].name == "heading":
+            title = siblings[idx + 1].text.strip()
+
+        # Collect content until next example heading
+        i = idx + 1
+        while i < len(siblings):
+            if siblings[i].name == "heading" and any(
+                keyword in siblings[i].text.strip().lower()
+                for keyword in ["example", "experiment", "test"]
+            ):
+                break
+            if siblings[i].name == "p":
+                current_content.append(siblings[i].text.strip())
+            i += 1
+
+        examples.append(
+            {"number": heading.text.strip(), "title": title, "content": current_content}
+        )
+
+    return examples if examples else None
 
 
 # Test the function
