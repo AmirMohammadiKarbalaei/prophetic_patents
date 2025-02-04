@@ -51,18 +51,28 @@ def extract_experiments_w_heading(text):
 
     # Find all "EXAMPLES/EXPERIMENTS" section headings
     examples_headings = soup.findAll(
-        lambda tag: tag.name == "heading"
-        and any(
-            keyword in tag.text.upper().replace(" ", "")
-            for keyword in [
-                "EXAMPLES",
-                # "EXAMPLE",
-                # "EXPERIMENT",
-                "EXPERIMENTS",
-                "Tests",
-            ]
-        )
-    )
+    lambda tag: tag.name == "heading"
+    and tag.text.strip().upper().replace(" ", "") in [
+        "EXAMPLES",
+        # "EXAMPLE",
+        # "EXPERIMENT",
+        "EXPERIMENTS",
+        "TESTS",
+    ]
+)
+    # examples_headings = soup.findAll(
+    #     lambda tag: tag.name == "heading"
+    #     and any(
+    #         keyword in tag.text.upper().replace(" ", "")
+    #         for keyword in [
+    #             "EXAMPLES",
+    #             # "EXAMPLE",
+    #             # "EXPERIMENT",
+    #             "EXPERIMENTS",
+    #             "Tests",
+    #         ]
+    #     )
+    # )
 
     if not examples_headings:
         return None
