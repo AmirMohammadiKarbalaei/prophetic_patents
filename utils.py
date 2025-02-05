@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 from lxml import etree
 import json
 from collections import defaultdict
+import os
+import requests
 
 
 def save_as_json(examples, filename="1200_patents_w_experiments.json"):
@@ -330,3 +332,111 @@ def remove_duplicate_docs(xml_parts):
         cleaned_parts.pop(idx)
 
     return cleaned_parts
+
+def download_files(main_url, download_path,files):
+    if not os.path.exists(download_path):
+        os.makedirs(download_path)
+    for index,file_name in enumerate(files):
+        url = main_url + file_name
+
+
+        zip_file_path = os.path.join(download_path, file_name) #.split(".")[-1]
+        response = requests.get(url, stream=True, timeout=10)
+        with open(zip_file_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"Downloaded {file_name} ------- {index + 1} / {len(files)}")
+
+
+def fetch_urls_from_pto(start_year,end_year):
+    urls = {}
+    for year in range(start_year, end_year + 1):
+        url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
+        rp = requests.get(url, timeout=10)
+        parser = etree.XMLParser(recover=True)
+        root = etree.fromstring(rp.text.encode(), parser)
+        href_values = root.findall(".//a[@href]")
+        urls[year] = [href.get('href') for href in href_values if href.get('href').endswith('.zip')]
+    return urls
+
+
+def get_latest_versions(urls):
+    """
+    Function to extract the latest versions of files based on a regex pattern.
+
+    Args:
+    - urls (dict): A dictionary where keys are years and values are lists of filenames.
+
+    Returns:
+    - latest_files (dict): A dictionary where keys are years and values are lists of the latest versions of the files for that year.
+    """
+    # Initialize the result dictionary to store the latest versions for each year
+    latest_files = {}
+
+    # Regex to extract date and optional revision number
+    pattern = re.compile(r"(ipa\d{6})(?:_r(\d+))?\.zip")
+
+    # Process each year in the input dictionary
+    for year in urls.keys():
+        latest_versions = {}  # Holds the latest version of files for the current year
+        for file in urls[year]:
+            match = pattern.match(file)
+            if match:
+                base_name, revision = match.groups()
+                revision = int(revision) if revision else 0  # Default to 0 if no revision
+                
+                # Extract the current highest revision number for the base_name
+                current_revision_match = re.search(r'_r(\d+)', latest_versions.get(base_name, ""))
+                current_revision = int(current_revision_match.group(1)) if current_revision_match else 0
+                
+                # Update if the new file has a higher revision
+                if base_name not in latest_versions or revision > current_revision:
+                    latest_versions[base_name] = file
+
+        # Get the final list of unique latest versions sorted by file name
+        latest_files[year] = sorted(latest_versions.values())
+
+    return latest_files
+def process_xml_files(directory_path):
+    """
+    Process all XML files in the given directory and split them into parts.
+    
+    Args:
+        directory_path (str): Path to directory containing XML files
+        
+    Returns:
+        list: Combined list of XML parts from all files
+    """
+    all_xml_parts = []
+    
+    # Get all XML files in directory
+    xml_files = [f for f in os.listdir(directory_path) if f.endswith('.xml')]
+    
+    # Process each file
+    for xml_file in xml_files:
+        file_path = os.path.join(directory_path, xml_file)
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                content = file.read()
+                parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
+                # Remove empty parts and extend master list
+                parts = [p for p in parts if p.strip()]
+                all_xml_parts.extend(parts)
+        except Exception as e:
+            print(f"Error processing {xml_file}: {str(e)}")
+    
+    return all_xml_parts
+
+def read_xml_file(file_path):
+    """
+    Read the content of an XML file.
+    
+    Args:
+        file_path (str): Path to the XML file
+    
+    Returns:
+        str: Content of the XML file
+    """
+    with open(file_path, "r", encoding="utf-8") as file:
+        content = file.read()
+    return content

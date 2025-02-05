@@ -6,16 +6,29 @@ import zipfile
 from lxml import etree
 
 
-def collect_urls(start_date, end_date):
-    url = "https://developer.uspto.gov/products/bdss/get/ajax"
-    params = {
-        "data": f'{{"name":"APPXML","fromDate":"{start_date}","toDate":"{end_date}"}}'
-    }
-    response = requests.get(url, params=params, timeout=10)
+# def collect_urls(start_date, end_date):
+#     url = "https://developer.uspto.gov/products/bdss/get/ajax"
+#     params = {
+#         "data": f'{{"name":"APPXML","fromDate":"{start_date}","toDate":"{end_date}"}}'
+#     }
+#     response = requests.get(url, params=params, timeout=10)
+#     if response.status_code != 200:
+#         print(f"Error: {response.status_code}")
+#         return []
+#     print(f"Urls collected for the period from {start_date} to {end_date} successfully")
+#     return response.json()["productFiles"]
+
+def collect_urls(year):
+    url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
+    # params = {
+    #     "data": f'{{"name":"APPXML","fromDate":"{start_date}","toDate":"{end_date}"}}'
+    # }
+    print(url)
+    response = requests.get(url, timeout=10)
     if response.status_code != 200:
         print(f"Error: {response.status_code}")
         return []
-    print(f"Urls collected for the period from {start_date} to {end_date} successfully")
+    #print(f"Urls collected for the period from {start_date} to {end_date} successfully")
     return response.json()["productFiles"]
 
 
