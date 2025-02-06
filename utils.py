@@ -249,15 +249,6 @@ def extract_all_examples(text):
         examples[title] = description
 
     return examples
-
-
-def find_doc_number(xml_part):
-    parser = etree.XMLParser(recover=True)
-    root = etree.fromstring(xml_part.encode(), parser)
-    doc_num = root.xpath("//publication-reference//document-id//doc-number/text()")
-    return doc_num
-
-
 def clean_text(text):
     """
     Clean text by removing special characters, extra spaces, and normalizing content
@@ -289,6 +280,10 @@ def clean_text(text):
 
     return text.strip()
 
+def find_doc_number(xml_part):
+    root = etree.fromstring(xml_part.encode(), etree.XMLParser(recover=True))
+    doc_num = root.xpath("//publication-reference//document-id//doc-number/text()")
+    return doc_num
 
 def remove_duplicate_docs(xml_parts):
     """
@@ -300,38 +295,62 @@ def remove_duplicate_docs(xml_parts):
     Returns:
         list: XML documents with duplicates removed
     """
-    # Create dictionaries to store document numbers and details
-    doc_versions = defaultdict(list)
-    doc_lengths = {}
-
-    # Collect all document numbers with positions and lengths
-    for i, xml in enumerate(xml_parts[1:], start=1):
+    doc_versions = {}
+    
+    for xml in xml_parts:
         doc_num = find_doc_number(xml)[0]
-        doc_versions[doc_num].append(i)
-        doc_lengths[i] = len(xml)
+        if doc_num not in doc_versions or len(xml) > len(doc_versions[doc_num]):
+            doc_versions[doc_num] = xml
 
-    # Find documents with multiple versions
-    duplicate_docs = {
-        doc_num: positions
-        for doc_num, positions in doc_versions.items()
-        if len(positions) > 1
-    }
+    return list(doc_versions.values())
 
-    # Remove shorter versions
-    indices_to_remove = []
-    for doc_num, positions in duplicate_docs.items():
-        longest_pos = max(positions, key=lambda pos: doc_lengths[pos])
-        indices_to_remove.extend([pos for pos in positions if pos != longest_pos])
+# def find_doc_number(xml_part):
+#     parser = etree.XMLParser(recover=True)
+#     root = etree.fromstring(xml_part.encode(), parser)
+#     doc_num = root.xpath("//publication-reference//document-id//doc-number/text()")
+#     return doc_num
+# def remove_duplicate_docs(xml_parts):
+#     """
+#     Remove duplicate documents keeping only the longest version.
 
-    # Sort indices in reverse order to remove from end first
-    indices_to_remove.sort(reverse=True)
+#     Args:
+#         xml_parts (list): List of XML documents
 
-    # Create new list without duplicates
-    cleaned_parts = xml_parts.copy()
-    for idx in indices_to_remove:
-        cleaned_parts.pop(idx)
+#     Returns:
+#         list: XML documents with duplicates removed
+#     """
+#     # Create dictionaries to store document numbers and details
+#     doc_versions = defaultdict(list)
+#     doc_lengths = {}
 
-    return cleaned_parts
+#     # Collect all document numbers with positions and lengths
+#     for i, xml in enumerate(xml_parts[1:], start=1):
+#         doc_num = find_doc_number(xml)[0]
+#         doc_versions[doc_num].append(i)
+#         doc_lengths[i] = len(xml)
+
+#     # Find documents with multiple versions
+#     duplicate_docs = {
+#         doc_num: positions
+#         for doc_num, positions in doc_versions.items()
+#         if len(positions) > 1
+#     }
+
+#     # Remove shorter versions
+#     indices_to_remove = []
+#     for doc_num, positions in duplicate_docs.items():
+#         longest_pos = max(positions, key=lambda pos: doc_lengths[pos])
+#         indices_to_remove.extend([pos for pos in positions if pos != longest_pos])
+
+#     # Sort indices in reverse order to remove from end first
+#     indices_to_remove.sort(reverse=True)
+
+#     # Create new list without duplicates
+#     cleaned_parts = xml_parts.copy()
+#     for idx in indices_to_remove:
+#         cleaned_parts.pop(idx)
+
+#     return cleaned_parts
 
 def download_files(main_url, download_path,files):
     if not os.path.exists(download_path):
