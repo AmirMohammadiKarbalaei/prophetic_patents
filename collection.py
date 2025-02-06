@@ -4,6 +4,7 @@ from tqdm import tqdm
 import os
 import zipfile
 from lxml import etree
+import time
 
 
 # def collect_urls(start_date, end_date):
@@ -40,7 +41,20 @@ def download_files(files, download_path):
         file_name = file["fileFromTime"] + "_" + file["fileName"].split(".")[0]
         zip_file_name = f"{file_name}.zip"
         zip_file_path = os.path.join(download_path, zip_file_name)
-        response = requests.get(file_url, stream=True, timeout=10)
+        try:
+            response = requests.get(file_url, stream=True, timeout=10)
+        except requests.exceptions.RequestException as e:
+            print(f"Error downloading {file_name}: {e}")
+            print("Retrying after 60 seconds...")
+            time.sleep(60)
+            try:
+                response = requests.get(file_url, stream=True, timeout=10)
+            except requests.exceptions.RequestException as e:
+                print(f"Error downloading {file_name} after retry: {e}")
+                print("Retrying after 180 seconds...")
+                time.sleep(180)
+                response = requests.get(file_url, stream=True, timeout=10)
+
         with open(zip_file_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
