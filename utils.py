@@ -53,15 +53,16 @@ def extract_experiments_w_heading(text):
 
     # Find all "EXAMPLES/EXPERIMENTS" section headings
     examples_headings = soup.findAll(
-    lambda tag: tag.name == "heading"
-    and tag.text.strip().upper().replace(" ", "") in [
-        "EXAMPLES",
-        # "EXAMPLE",
-        # "EXPERIMENT",
-        "EXPERIMENTS",
-        "TESTS",
-    ]
-)
+        lambda tag: tag.name == "heading"
+        and tag.text.strip().upper().replace(" ", "")
+        in [
+            "EXAMPLES",
+            # "EXAMPLE",
+            # "EXPERIMENT",
+            "EXPERIMENTS",
+            "TESTS",
+        ]
+    )
     # examples_headings = soup.findAll(
     #     lambda tag: tag.name == "heading"
     #     and any(
@@ -249,6 +250,8 @@ def extract_all_examples(text):
         examples[title] = description
 
     return examples
+
+
 def clean_text(text):
     """
     Clean text by removing special characters, extra spaces, and normalizing content
@@ -280,10 +283,12 @@ def clean_text(text):
 
     return text.strip()
 
+
 def find_doc_number(xml_part):
     root = etree.fromstring(xml_part.encode(), etree.XMLParser(recover=True))
     doc_num = root.xpath("//publication-reference//document-id//doc-number/text()")
     return doc_num
+
 
 def remove_duplicate_docs(xml_parts):
     """
@@ -296,13 +301,14 @@ def remove_duplicate_docs(xml_parts):
         list: XML documents with duplicates removed
     """
     doc_versions = {}
-    
+
     for xml in xml_parts:
         doc_num = find_doc_number(xml)[0]
         if doc_num not in doc_versions or len(xml) > len(doc_versions[doc_num]):
             doc_versions[doc_num] = xml
 
     return list(doc_versions.values())
+
 
 # def find_doc_number(xml_part):
 #     parser = etree.XMLParser(recover=True)
@@ -352,14 +358,14 @@ def remove_duplicate_docs(xml_parts):
 
 #     return cleaned_parts
 
-def download_files(main_url, download_path,files):
+
+def download_files(main_url, download_path, files):
     if not os.path.exists(download_path):
         os.makedirs(download_path)
-    for index,file_name in enumerate(files):
+    for index, file_name in enumerate(files):
         url = main_url + file_name
 
-
-        zip_file_path = os.path.join(download_path, file_name) #.split(".")[-1]
+        zip_file_path = os.path.join(download_path, file_name)  # .split(".")[-1]
         response = requests.get(url, stream=True, timeout=10)
         with open(zip_file_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -367,15 +373,18 @@ def download_files(main_url, download_path,files):
         print(f"Downloaded {file_name} ------- {index + 1} / {len(files)}")
 
 
-def fetch_urls_from_pto(start_year,end_year):
+def fetch_urls_from_pto(start_year, end_year):
     urls = {}
     for year in range(start_year, end_year + 1):
         url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
         rp = requests.get(url, timeout=10)
-        parser = etree.XMLParser(recover=True)
-        root = etree.fromstring(rp.text.encode(), parser)
+        root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
         href_values = root.findall(".//a[@href]")
-        urls[year] = [href.get('href') for href in href_values if href.get('href').endswith('.zip')]
+        urls[year] = [
+            href.get("href")
+            for href in href_values
+            if href.get("href").endswith(".zip")
+        ]
     return urls
 
 
@@ -402,12 +411,20 @@ def get_latest_versions(urls):
             match = pattern.match(file)
             if match:
                 base_name, revision = match.groups()
-                revision = int(revision) if revision else 0  # Default to 0 if no revision
-                
+                revision = (
+                    int(revision) if revision else 0
+                )  # Default to 0 if no revision
+
                 # Extract the current highest revision number for the base_name
-                current_revision_match = re.search(r'_r(\d+)', latest_versions.get(base_name, ""))
-                current_revision = int(current_revision_match.group(1)) if current_revision_match else 0
-                
+                current_revision_match = re.search(
+                    r"_r(\d+)", latest_versions.get(base_name, "")
+                )
+                current_revision = (
+                    int(current_revision_match.group(1))
+                    if current_revision_match
+                    else 0
+                )
+
                 # Update if the new file has a higher revision
                 if base_name not in latest_versions or revision > current_revision:
                     latest_versions[base_name] = file
@@ -416,21 +433,23 @@ def get_latest_versions(urls):
         latest_files[year] = sorted(latest_versions.values())
 
     return latest_files
+
+
 def process_xml_files(directory_path):
     """
     Process all XML files in the given directory and split them into parts.
-    
+
     Args:
         directory_path (str): Path to directory containing XML files
-        
+
     Returns:
         list: Combined list of XML parts from all files
     """
     all_xml_parts = []
-    
+
     # Get all XML files in directory
-    xml_files = [f for f in os.listdir(directory_path) if f.endswith('.xml')]
-    
+    xml_files = [f for f in os.listdir(directory_path) if f.endswith(".xml")]
+
     # Process each file
     for xml_file in xml_files:
         file_path = os.path.join(directory_path, xml_file)
@@ -443,19 +462,92 @@ def process_xml_files(directory_path):
                 all_xml_parts.extend(parts)
         except Exception as e:
             print(f"Error processing {xml_file}: {str(e)}")
-    
+
     return all_xml_parts
+
 
 def read_xml_file(file_path):
     """
     Read the content of an XML file.
-    
+
     Args:
         file_path (str): Path to the XML file
-    
+
     Returns:
         str: Content of the XML file
     """
     with open(file_path, "r", encoding="utf-8") as file:
         content = file.read()
     return content
+
+
+def extract_classify_num_patents_w_experiments(
+    folder_path="D:\\unzipped_patents_23_24",
+):
+    # https://dimensions.freshdesk.com/support/solutions/articles/23000018832-what-are-the-ipcr-and-cpc-patent-classifications- (IPCR AND CPC CLASSIFICATIONS)
+
+    ipc_sector_map = {
+        "A": "Human Necessities",
+        "B": "Performing Operations; Transporting",
+        "C": "Chemistry; Metallurgy",
+        "D": "Textiles; Paper",
+        "E": "Fixed Constructions",
+        "F": "Mechanical Engineering; Lighting; Heating",
+        "G": "Physics",
+        "H": "Electricity",
+        "Unknown Sector": "Unknown Sector",
+        "Not Found": "Not Found",
+    }
+
+    sectors_dict = {
+        sector: {"examples": 0, "without_examples": 0}
+        for sector in ipc_sector_map.values()
+    }
+
+    file_names = os.listdir(folder_path)
+    total_num_of_patents = 0
+    for i, file in enumerate(file_names):
+        all_xml_parts = []
+        if file.endswith(".xml"):
+            print(f"Processing {file}... ({i + 1}/{len(file_names)})")
+            file_path = os.path.join(folder_path, file)
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
+                    parts = [p for p in parts if p.strip()]
+                    all_xml_parts.extend(parts)
+            except Exception as e:
+                print(f"Error processing {file}: {str(e)}")
+            # xml_no_dup = remove_duplicate_docs(all_xml_parts)
+            # print(f"Num of duplicates removed: {len(all_xml_parts) - len(xml_no_dup)} out of {len(all_xml_parts)}")
+            total_num_of_patents += len(all_xml_parts)
+            for j, xml in enumerate(all_xml_parts):
+                if j % 2000 == 0:
+                    total_without_examples = sum(
+                        sector["without_examples"] for sector in sectors_dict.values()
+                    )
+                    total_with_examples = sum(
+                        sector["examples"] for sector in sectors_dict.values()
+                    )
+                    print(
+                        f"Total without examples: {total_without_examples}, Total with examples: {total_with_examples}, Total patents: {total_num_of_patents}"
+                    )
+                    print(f"Processed {j} out of {len(all_xml_parts)}")
+
+                root = etree.fromstring(xml.encode(), etree.XMLParser(recover=True))
+                try:
+                    section = root.xpath(
+                        "//classifications-ipcr/classification-ipcr/section/text()"
+                    )[0]
+                    sector = ipc_sector_map.get(section, "Unknown Sector")
+
+                except IndexError:
+                    sector = "Not Found"
+
+                # Update the counts in the dictionary
+                if extract_experiments_w_heading(xml):
+                    sectors_dict[sector]["examples"] += 1
+                else:
+                    sectors_dict[sector]["without_examples"] += 1
+    return sectors_dict
