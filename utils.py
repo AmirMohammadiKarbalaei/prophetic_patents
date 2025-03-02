@@ -290,6 +290,12 @@ def find_doc_number(xml_part):
     return doc_num
 
 
+def find_patent_number(xml_part):
+    root = etree.fromstring(xml_part.encode(), etree.XMLParser(recover=True))
+    patent_num = root.xpath("//application-reference//document-id//doc-number/text()")
+    return patent_num
+
+
 def remove_duplicate_docs(xml_parts):
     """
     Remove duplicate documents keeping only the longest version.
@@ -375,16 +381,28 @@ def download_files(main_url, download_path, files):
 
 def fetch_urls_from_pto(start_year, end_year):
     urls = {}
-    for year in range(start_year, end_year + 1):
-        url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
+    if start_year > end_year:
+        for year in range(start_year, end_year + 1):
+            url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
+            rp = requests.get(url, timeout=10)
+            root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
+            href_values = root.findall(".//a[@href]")
+            urls[year] = [
+                href.get("href")
+                for href in href_values
+                if href.get("href").endswith(".zip")
+            ]
+    elif start_year == end_year:
+        url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{start_year}/"
         rp = requests.get(url, timeout=10)
         root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
         href_values = root.findall(".//a[@href]")
-        urls[year] = [
+        urls[start_year] = [
             href.get("href")
             for href in href_values
             if href.get("href").endswith(".zip")
         ]
+
     return urls
 
 
@@ -498,6 +516,7 @@ def extract_classify_num_patents_w_experiments(
         "Unknown Sector": "Unknown Sector",
         "Not Found": "Not Found",
     }
+    ipc_dic = extract_ipc_dic()
 
     sectors_dict = {
         sector: {"examples": 0, "without_examples": 0}
@@ -547,7 +566,100 @@ def extract_classify_num_patents_w_experiments(
 
                 # Update the counts in the dictionary
                 if extract_experiments_w_heading(xml):
-                    sectors_dict[sector]["examples"] += 1
+                    sectors_dict[sector]["with_examples"] += 1
                 else:
                     sectors_dict[sector]["without_examples"] += 1
     return sectors_dict
+
+
+def extract_ipc_dic(ipc_path="./EN_ipc_title_list_20250101"):
+    ipc_path = "./EN_ipc_title_list_20250101"
+    file_names = os.listdir(ipc_path)
+    ipc_dict = {}
+    for file_name in file_names:
+        with open(ipc_path + "/" + file_name, "r", encoding="utf-8") as file:
+            lines = file.readlines()  # each line becomes an element in a list
+            lines = [line.strip() for line in lines]
+        dic = {l.split("\t")[0]: l.split("\t")[1] for l in lines[1:] if "\t" in l[:4]}
+        ipc_dict[file_name.split("_")[3]] = dic
+    return ipc_dict
+
+
+def extract_classify_num_patents_w_experiments_w_subclass(
+    folder_path="D:\\unzipped_patents_23_24",
+):
+    # https://dimensions.freshdesk.com/support/solutions/articles/23000018832-what-are-the-ipcr-and-cpc-patent-classifications- (IPCR AND CPC CLASSIFICATIONS)
+
+    ipc_dic = extract_ipc_dic()
+    subclass_dict = {}
+
+    file_names = os.listdir(folder_path)
+    total_num_of_patents = 0
+    for i, file_name in enumerate(file_names):
+        all_xml_parts = []
+        if file_name.endswith(".xml"):
+            print(f"Processing {file_name}... ({i + 1}/{len(file_names)})")
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
+                    parts = [p for p in parts if p.strip()]
+                    all_xml_parts.extend(parts)
+            except Exception as e:
+                print(f"Error processing {file}: {str(e)}")
+            # xml_no_dup = remove_duplicate_docs(all_xml_parts)
+            # print(f"Num of duplicates removed: {len(all_xml_parts) - len(xml_no_dup)} out of {len(all_xml_parts)}")
+            total_num_of_patents += len(all_xml_parts)
+            for j, xml in enumerate(all_xml_parts):
+                if j % 2000 == 0:
+                    print(f"Processing {j}/{len(all_xml_parts)}")
+                root = etree.fromstring(xml.encode(), etree.XMLParser(recover=True))
+                try:
+                    sections = root.xpath(
+                        "//classifications-ipcr/classification-ipcr/section"
+                    )
+                    classes = root.xpath(
+                        "//classifications-ipcr/classification-ipcr/class"
+                    )
+
+                    # Get unique subclass names for this patent
+                    this_subclass_names = set()
+                    for section_elem, class_elem in zip(sections, classes):
+                        section = section_elem.text
+                        class_code = class_elem.text
+                        full_code = section + class_code
+
+                        try:
+                            subclass_name = ipc_dic[section][full_code]
+                            this_subclass_names.add(subclass_name)
+                        except KeyError:
+                            continue
+
+                    # Update counts for each subclass found
+                    for subclass_name in this_subclass_names:
+                        if subclass_name not in subclass_dict:
+                            subclass_dict[subclass_name] = {
+                                "with_examples": 0,
+                                "without_examples": 0,
+                            }
+
+                        if extract_experiments_w_heading(xml):
+                            subclass_dict[subclass_name]["with_examples"] += 1
+                        else:
+                            subclass_dict[subclass_name]["without_examples"] += 1
+
+                except IndexError:
+                    continue
+            if i == 0:
+                start = file_name.split("a")[1].split(".")[0]
+                end = start
+            else:
+                end = file_name.split("a")[1].split(".")[0]
+
+            save_as_json(
+                subclass_dict,
+                f"subclass_of_{total_num_of_patents}_Patents_{start}_{end}.json",
+            )
+
+    return subclass_dict
