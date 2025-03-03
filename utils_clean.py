@@ -362,7 +362,7 @@ def extract_classify_num_patents_w_experiments(
 
 
 def extract_num_dot_examples(text):
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
 
     examples = {}
     current_heading = None
@@ -397,7 +397,7 @@ def extract_experiments_w_heading(text):
     """Extracts all 'Examples/Experiments' sections from a patent text."""
 
     # Use BeautifulSoup to parse the structure
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
 
     # Find all "EXAMPLES/EXPERIMENTS" section headings
     examples_headings = soup.findAll(
@@ -461,16 +461,20 @@ def extract_examples_start_w_word(xml_siblings):
 
 def extract_examples_w_word(text):
     """Find all example/experiment/test sections and extract their content"""
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
     examples = []
 
     # Find all matching headings
     example_headings = soup.findAll(
         lambda tag: tag.name == "heading"
         and any(
-            keyword in tag.text.strip().lower()
-            for keyword in ["example", "experiment", "test"]
-        )
+        keyword in tag.text.strip().lower().replace(" ", "")
+        for keyword in ["example", "experiment", "test"]
+    )
+    and not any(
+        excluded in tag.text.strip().lower().replace(" ", "")
+        for excluded in ["reference", "preparation"]
+    )
     )
 
     for heading in example_headings:
@@ -489,10 +493,13 @@ def extract_examples_w_word(text):
         while sibling and not (
             sibling.name == "heading"
             and any(
-                keyword in sibling.text.strip().lower().replace(" ", "")
-                for keyword in ["example", "experiment", "test"]
-            )
-        ):
+            keyword in sibling.text.strip().lower().replace(" ", "")
+            for keyword in ["example", "experiment", "test"]
+        )
+        and not any(
+            excluded in sibling.text.strip().lower().replace(" ", "")
+            for excluded in ["reference", "preparation"]
+        )):
             if sibling.name == "p":
                 current_content.append(sibling.text.strip())
             sibling = sibling.find_next_sibling()
@@ -509,14 +516,19 @@ def process_siblings(xml_siblings):
 
     # Find all matching headings directly from xml_siblings
     example_headings = [
-        tag
-        for tag in xml_siblings
-        if tag.name == "heading"
-        and any(
-            keyword in tag.text.strip().lower().replace(" ", "")
-            for keyword in ["example", "experiment", "test"]
-        )
-    ]
+    tag
+    for tag in xml_siblings
+    if tag.name == "heading"
+    and any(
+        keyword in tag.text.strip().lower().replace(" ", "")
+        for keyword in ["example", "experiment", "test"]
+    )
+    and not any(
+        excluded in tag.text.strip().lower().replace(" ", "")
+        for excluded in ["reference", "preparation"]
+    )
+]
+
 
     for heading in example_headings:
         current_content = []
@@ -531,9 +543,10 @@ def process_siblings(xml_siblings):
         i = idx + 1
         while i < len(xml_siblings):
             if xml_siblings[i].name == "heading" and any(
-                keyword in xml_siblings[i].text.strip().lower()
-                for keyword in ["example", "experiment", "test"]
-            ):
+        keyword in xml_siblings[i].text.strip().lower().replace(" ", "")
+        for keyword in ["example", "experiment", "test"]
+        ) and not any(excluded in xml_siblings[i].text.strip().lower().replace(" ", "")
+            for excluded in ["reference", "preparation"]):
                 break
             if xml_siblings[i].name == "p":
                 current_content.append(xml_siblings[i].text.strip())
