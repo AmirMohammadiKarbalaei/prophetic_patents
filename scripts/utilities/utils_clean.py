@@ -1,17 +1,34 @@
 import json
 import os
 import re
-
+import argparse
 import requests
 from bs4 import BeautifulSoup
 from lxml import etree
-import xlwings as xw
+
 import pandas as pd
 from tqdm import tqdm
 import zipfile
 import pickle
 
+
 # region General utils
+def validate_kind(value):
+    """Validate if the kind is either 'application' or 'grant'."""
+    if value not in ["application", "grant"]:
+        raise argparse.ArgumentTypeError("Kind must be either 'application' or 'grant'")
+    return value
+
+
+def validate_year(year):
+    """Validate if the year is between 1976 and 2025."""
+    try:
+        year = int(year)
+        if 1976 <= year <= 2025:
+            return year
+        raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError("Year must be between 1976 and 2025")
 
 
 def save_as_pickle(test_dataset, filename="test_dataset.pkl"):
@@ -61,6 +78,8 @@ def read_json(file_path):
 
 
 def read_xlsb_file(path="Freilich.Data.Compressed.xlsb"):
+    import xlwings as xw
+
     app = xw.App(visible=False)
     workbook = app.books.open(path)
     sheet = workbook.sheets[1]  # Or use sheet name
@@ -254,40 +273,25 @@ def download_files(url, download_path, files):
         print(f"Downloaded {file_name} ------- {index + 1} / {len(files)}")
 
 
-def download_patents_pto(start_year, end_year, kind="application", download_path=None):
+def download_patents_pto(year, kind="application", download_path=None):
     try:
         if download_path is None:
             # Format path based on year range
-            if start_year == end_year:
-                download_path = f"patent_{kind}_{start_year}"
-            else:
-                download_path = f"patent_{kind}_{start_year}_{end_year}"
+
+            download_path = f"patent_{kind}_{year}"
         urls = {}
-        if start_year > end_year:
-            for year in range(start_year, end_year + 1):
-                url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{year}/"
-                rp = requests.get(url, timeout=10)
-                root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
-                href_values = root.findall(".//a[@href]")
-                urls = [
-                    href.get("href")
-                    for href in href_values
-                    if href.get("href").endswith(".zip")
-                ]
-                url_no_dup = get_latest_versions(urls, kind[0])
-                download_files(url, download_path, url_no_dup)
-        elif start_year == end_year:
-            url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{start_year}/"
-            rp = requests.get(url, timeout=10)
-            root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
-            href_values = root.findall(".//a[@href]")
-            urls = [
-                href.get("href")
-                for href in href_values
-                if href.get("href").endswith(".zip")
-            ]
-            url_no_dup = get_latest_versions(urls, kind[0])
-            download_files(url, download_path, url_no_dup)
+
+        url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{year}/"
+        rp = requests.get(url, timeout=10)
+        root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
+        href_values = root.findall(".//a[@href]")
+        urls = [
+            href.get("href")
+            for href in href_values
+            if href.get("href").endswith(".zip")
+        ]
+        url_no_dup = get_latest_versions(urls, kind[0])
+        download_files(url, download_path, url_no_dup)
         return True
 
     except requests.exceptions.RequestException as e:

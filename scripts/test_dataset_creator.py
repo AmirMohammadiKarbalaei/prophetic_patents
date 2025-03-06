@@ -1,19 +1,8 @@
 import argparse
 import os
 from utilities.test_dataset_utils import create_test_dataset_from_freilich
-from utilities.utils_clean import download_patents_pto, unzip_files
+from utilities.utils_clean import download_patents_pto, unzip_files, validate_year
 # python test_dataset_creator.py --year 2015 --freilich-path Freilich.Data.Compressed.xlsb --download
-
-
-def validate_year(year):
-    """Validate if the year is between 1976 and 2025."""
-    try:
-        year = int(year)
-        if 1976 <= year <= 2025:
-            return year
-        raise ValueError
-    except ValueError:
-        raise argparse.ArgumentTypeError("Year must be between 1976 and 2025")
 
 
 def validate_file_path(path):
@@ -64,8 +53,7 @@ def main():
         try:
             print(f"Downloading XML files from USPTO for the year {args.year}")
             download_success = download_patents_pto(
-                start_year=args.year,
-                end_year=args.year,
+                year=args.year,
                 kind="grant",
                 download_path=f"zipped_files_{args.year}",
             )

@@ -19,6 +19,7 @@ import time
 #     print(f"Urls collected for the period from {start_date} to {end_date} successfully")
 #     return response.json()["productFiles"]
 
+
 def collect_urls(year):
     url = f"https://bulkdata.uspto.gov/data/patent/application/redbook/fulltext/{year}/"
     # params = {
@@ -29,7 +30,7 @@ def collect_urls(year):
     if response.status_code != 200:
         print(f"Error: {response.status_code}")
         return []
-    #print(f"Urls collected for the period from {start_date} to {end_date} successfully")
+    # print(f"Urls collected for the period from {start_date} to {end_date} successfully")
     return response.json()["productFiles"]
 
 
