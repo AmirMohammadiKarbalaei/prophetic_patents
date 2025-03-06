@@ -1,6 +1,5 @@
 import os
-import xml.etree.ElementTree as ET
-from utils_clean import find_doc_number, read_xlsb_file, save_as_pickle
+from utilities.utils_clean import find_doc_number, read_xlsb_file, save_as_pickle
 
 
 def remove_leadiong_zeros(s):

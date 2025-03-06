@@ -113,12 +113,17 @@ def extract_ipc_dic(ipc_path="./EN_ipc_title_list_20250101"):
 def unzip_files(download_path, unzip_path):
     if not os.path.exists(unzip_path):
         os.makedirs(unzip_path)
-    for file_name in tqdm(os.listdir(download_path), desc="Unzipping files"):
-        if file_name.endswith(".zip"):
-            zip_file_path = os.path.join(download_path, file_name)
-            with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
-                zip_ref.extractall(unzip_path)
-            print(f"Unzipped {file_name} to {unzip_path}")
+    try:
+        for file_name in tqdm(os.listdir(download_path), desc="Unzipping files"):
+            if file_name.endswith(".zip"):
+                zip_file_path = os.path.join(download_path, file_name)
+                with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+                    zip_ref.extractall(unzip_path)
+                print(f"Unzipped {file_name} to {unzip_path}")
+        return True
+    except Exception as e:
+        print(f"Error during unzip: {e}")
+        return False
 
 
 def find_doc_number(xml_part):
@@ -156,7 +161,7 @@ def remove_duplicate_docs(xml_parts):
     return list(doc_versions.values())
 
 
-def get_latest_versions(urls):
+def get_latest_versions(urls, kind="g"):
     """
     Function to extract the latest versions of files based on a regex pattern.
 
@@ -169,8 +174,10 @@ def get_latest_versions(urls):
     # Initialize the result dictionary to store the latest versions for each year
     latest_files = {}
 
-    # Regex to extract date and optional revision number
-    pattern = re.compile(r"(ipa\d{6})(?:_r(\d+))?\.zip")
+    if kind == "g":
+        pattern = re.compile(r"(ipg\d{6})(?:_r(\d+))?\.zip")
+    elif kind == "a":
+        pattern = re.compile(r"(ipa\d{6})(?:_r(\d+))?\.zip")
 
     # Process each year in the input dictionary
 
@@ -248,16 +255,29 @@ def download_files(url, download_path, files):
 
 
 def download_patents_pto(start_year, end_year, kind="application", download_path=None):
-    if download_path is None:
-        # Format path based on year range
-        if start_year == end_year:
-            download_path = f"D:/patent_{kind}_{start_year}"
-        else:
-            download_path = f"D:/patent_{kind}_{start_year}_{end_year}"
-    urls = {}
-    if start_year > end_year:
-        for year in range(start_year, end_year + 1):
-            url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{year}/"
+    try:
+        if download_path is None:
+            # Format path based on year range
+            if start_year == end_year:
+                download_path = f"patent_{kind}_{start_year}"
+            else:
+                download_path = f"patent_{kind}_{start_year}_{end_year}"
+        urls = {}
+        if start_year > end_year:
+            for year in range(start_year, end_year + 1):
+                url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{year}/"
+                rp = requests.get(url, timeout=10)
+                root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
+                href_values = root.findall(".//a[@href]")
+                urls = [
+                    href.get("href")
+                    for href in href_values
+                    if href.get("href").endswith(".zip")
+                ]
+                url_no_dup = get_latest_versions(urls, kind[0])
+                download_files(url, download_path, url_no_dup)
+        elif start_year == end_year:
+            url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{start_year}/"
             rp = requests.get(url, timeout=10)
             root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
             href_values = root.findall(".//a[@href]")
@@ -266,23 +286,13 @@ def download_patents_pto(start_year, end_year, kind="application", download_path
                 for href in href_values
                 if href.get("href").endswith(".zip")
             ]
-            url_no_dup = get_latest_versions(urls)
+            url_no_dup = get_latest_versions(urls, kind[0])
             download_files(url, download_path, url_no_dup)
+        return True
 
-    elif start_year == end_year:
-        url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{start_year}/"
-        rp = requests.get(url, timeout=10)
-        root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
-        href_values = root.findall(".//a[@href]")
-        urls = [
-            href.get("href")
-            for href in href_values
-            if href.get("href").endswith(".zip")
-        ]
-        url_no_dup = get_latest_versions(urls)
-        download_files(url, download_path, url_no_dup)
-    else:
-        raise ValueError("Start year cannot be greater than the end year.")
+    except requests.exceptions.RequestException as e:
+        print(f"Error during download: {e}")
+        return False
 
 
 def extract_classify_num_patents_w_experiments(
@@ -468,13 +478,13 @@ def extract_examples_w_word(text):
     example_headings = soup.findAll(
         lambda tag: tag.name == "heading"
         and any(
-        keyword in tag.text.strip().lower().replace(" ", "")
-        for keyword in ["example", "experiment", "test"]
-    )
-    and not any(
-        excluded in tag.text.strip().lower().replace(" ", "")
-        for excluded in ["reference", "preparation"]
-    )
+            keyword in tag.text.strip().lower().replace(" ", "")
+            for keyword in ["example", "experiment", "test"]
+        )
+        and not any(
+            excluded in tag.text.strip().lower().replace(" ", "")
+            for excluded in ["reference", "preparation"]
+        )
     )
 
     for heading in example_headings:
@@ -493,13 +503,14 @@ def extract_examples_w_word(text):
         while sibling and not (
             sibling.name == "heading"
             and any(
-            keyword in sibling.text.strip().lower().replace(" ", "")
-            for keyword in ["example", "experiment", "test"]
-        )
-        and not any(
-            excluded in sibling.text.strip().lower().replace(" ", "")
-            for excluded in ["reference", "preparation"]
-        )):
+                keyword in sibling.text.strip().lower().replace(" ", "")
+                for keyword in ["example", "experiment", "test"]
+            )
+            and not any(
+                excluded in sibling.text.strip().lower().replace(" ", "")
+                for excluded in ["reference", "preparation"]
+            )
+        ):
             if sibling.name == "p":
                 current_content.append(sibling.text.strip())
             sibling = sibling.find_next_sibling()
@@ -516,19 +527,18 @@ def process_siblings(xml_siblings):
 
     # Find all matching headings directly from xml_siblings
     example_headings = [
-    tag
-    for tag in xml_siblings
-    if tag.name == "heading"
-    and any(
-        keyword in tag.text.strip().lower().replace(" ", "")
-        for keyword in ["example", "experiment", "test"]
-    )
-    and not any(
-        excluded in tag.text.strip().lower().replace(" ", "")
-        for excluded in ["reference", "preparation"]
-    )
-]
-
+        tag
+        for tag in xml_siblings
+        if tag.name == "heading"
+        and any(
+            keyword in tag.text.strip().lower().replace(" ", "")
+            for keyword in ["example", "experiment", "test"]
+        )
+        and not any(
+            excluded in tag.text.strip().lower().replace(" ", "")
+            for excluded in ["reference", "preparation"]
+        )
+    ]
 
     for heading in example_headings:
         current_content = []
@@ -542,11 +552,17 @@ def process_siblings(xml_siblings):
         # Collect content until next example heading
         i = idx + 1
         while i < len(xml_siblings):
-            if xml_siblings[i].name == "heading" and any(
-        keyword in xml_siblings[i].text.strip().lower().replace(" ", "")
-        for keyword in ["example", "experiment", "test"]
-        ) and not any(excluded in xml_siblings[i].text.strip().lower().replace(" ", "")
-            for excluded in ["reference", "preparation"]):
+            if (
+                xml_siblings[i].name == "heading"
+                and any(
+                    keyword in xml_siblings[i].text.strip().lower().replace(" ", "")
+                    for keyword in ["example", "experiment", "test"]
+                )
+                and not any(
+                    excluded in xml_siblings[i].text.strip().lower().replace(" ", "")
+                    for excluded in ["reference", "preparation"]
+                )
+            ):
                 break
             if xml_siblings[i].name == "p":
                 current_content.append(xml_siblings[i].text.strip())
