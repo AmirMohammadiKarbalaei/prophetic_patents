@@ -117,6 +117,15 @@ def extract_experiments_w_heading(text):
 
 
 def extract_examples_start_w_word(siblings):
+    """
+    Extracts examples/experiments/tests sections that start with specific words (example, experiment, test) from the given xml siblings.
+
+    Args:
+        siblings (list): List of sibling tags to process.
+
+    Returns:
+        list: List of dictionaries containing the extracted examples.
+    """
     examples = []
     current_example = None
     in_example = False
@@ -145,11 +154,18 @@ def extract_examples_start_w_word(siblings):
 
 
 def extract_examples_w_word(text):
-    """Find all example/experiment/test sections and extract their content"""
+    """Extract examples/experiments/tests sections from a patent text by looking for specific keywords in headings and
+    extarcxting the content until the next heading with specific keywords is found.
+
+    Args:
+        text (str): The patent text to extract examples from.
+
+    Returns:
+        list: A list of dictionaries containing the extracted examples."""
+
     soup = BeautifulSoup(text, "html.parser")
     examples = []
 
-    # Find all matching headings
     example_headings = soup.findAll(
         lambda tag: tag.name == "heading"
         and any(
