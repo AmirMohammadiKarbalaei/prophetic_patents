@@ -112,8 +112,7 @@ def read_xml_file(file_path):
 
 
 # region Utils
-def extract_ipc_dic(ipc_path="./EN_ipc_title_list_20250101"):
-    ipc_path = "./EN_ipc_title_list_20250101"
+def extract_ipc_dic(ipc_path="../temp/EN_ipc_title_list_20250101"):
     file_names = os.listdir(ipc_path)
     ipc_dict = {}
     for file_name in file_names:
