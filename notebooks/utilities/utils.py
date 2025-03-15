@@ -14,7 +14,7 @@ def save_as_json(examples, filename="1200_patents_w_experiments.json"):
 
 
 def extract_num_dot_examples(text):
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
 
     examples = {}
     current_heading = None
@@ -49,7 +49,7 @@ def extract_experiments_w_heading(text):
     """Extracts all 'Examples/Experiments' sections from a patent text."""
 
     # Use BeautifulSoup to parse the structure
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
 
     # Find all "EXAMPLES/EXPERIMENTS" section headings
     examples_headings = soup.findAll(
@@ -88,7 +88,7 @@ def extract_experiments_w_heading(text):
 #     """Extracts the 'Examples' section and its experiments from a patent text."""
 
 #     # Use BeautifulSoup to parse the structure (for HTML-like patents)
-#     soup = BeautifulSoup(text, "html.parser")
+#     soup = BeautifulSoup(text, "xml")
 
 #     # Find the "EXAMPLES" section heading
 #     examples_heading = soup.find(
@@ -163,7 +163,7 @@ def extract_examples_w_word(text):
     Returns:
         list: A list of dictionaries containing the extracted examples."""
 
-    soup = BeautifulSoup(text, "html.parser")
+    soup = BeautifulSoup(text, "xml")
     examples = []
 
     example_headings = soup.findAll(
@@ -282,7 +282,7 @@ def clean_text(text):
         return ""
 
     # Remove HTML tags if present
-    text = BeautifulSoup(text, "html.parser").get_text()
+    text = BeautifulSoup(text, "xml").get_text()
 
     # Replace newlines, tabs, and multiple spaces
     text = re.sub(r"\s+", " ", text)
