@@ -11,8 +11,21 @@ from tqdm import tqdm
 import zipfile
 import pickle
 
+from utilities.database_utils import store_patent_examples, store_patent_statistics
+from utilities.nlp_processing import dic_to_dic_w_tense_test
+
 
 # region General utils
+
+
+def remove_leadiong_zeros(s):
+    s = s.replace("[", "").replace("]", "").replace("'", "").replace(" ", "")
+
+    if len(s) == 8 and s.startswith("0"):
+        s = s[1:]
+    return s
+
+
 def validate_kind(value):
     """Validate if the kind is either 'application' or 'grant'."""
     if value not in ["application", "grant"]:
@@ -112,8 +125,7 @@ def read_xml_file(file_path):
 
 
 # region Utils
-def extract_ipc_dic(ipc_path="./EN_ipc_title_list_20250101"):
-    ipc_path = "./EN_ipc_title_list_20250101"
+def extract_ipc_dic(ipc_path="../temp/EN_ipc_title_list_20250101"):
     file_names = os.listdir(ipc_path)
     ipc_dict = {}
     for file_name in file_names:
@@ -276,11 +288,8 @@ def download_files(url, download_path, files):
 def download_patents_pto(year, kind="application", download_path=None):
     try:
         if download_path is None:
-            # Format path based on year range
-
-            download_path = f"patent_{kind}_{year}"
+            download_path = f"data/patent_{kind}_{year}_zip"
         urls = {}
-
         url = f"https://bulkdata.uspto.gov/data/patent/{kind}/redbook/fulltext/{year}/"
         rp = requests.get(url, timeout=10)
         root = etree.fromstring(rp.text.encode(), etree.XMLParser(recover=True))
@@ -292,11 +301,11 @@ def download_patents_pto(year, kind="application", download_path=None):
         ]
         url_no_dup = get_latest_versions(urls, kind[0])
         download_files(url, download_path, url_no_dup)
-        return True
+        return True, download_path
 
     except requests.exceptions.RequestException as e:
         print(f"Error during download: {e}")
-        return False
+        return False, ""
 
 
 def extract_classify_num_patents_w_experiments(
@@ -373,6 +382,78 @@ def extract_classify_num_patents_w_experiments(
 
 
 # region Experiments section
+def extract_and_save_examples_in_db(
+    folder_path="D:\\unzipped_patents_23_24",
+):
+    # https://dimensions.freshdesk.com/support/solutions/articles/23000018832-what-are-the-ipcr-and-cpc-patent-classifications- (IPCR AND CPC CLASSIFICATIONS)
+    doc_w_exp = {}
+    found_heading = 0
+    not_found_heading = 0
+
+    file_names = os.listdir(folder_path)
+    total_num_of_patents = 0
+    for i, file in enumerate(file_names):
+        all_xml_parts = []
+        if file.endswith(".xml"):
+            print(f"Processing {file}... ({i + 1}/{len(file_names)})")
+            file_path = os.path.join(folder_path, file)
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
+                    parts = [p for p in parts if p.strip()]
+                    all_xml_parts.extend(parts)
+            except Exception as e:
+                print(f"Error processing {file}: {str(e)}")
+            # xml_no_dup = remove_duplicate_docs(all_xml_parts)
+            # print(f"Num of duplicates removed: {len(all_xml_parts) - len(xml_no_dup)} out of {len(all_xml_parts)}")
+            total_num_of_patents += len(all_xml_parts)
+            for j, xml in enumerate(all_xml_parts):
+                if j % 1000 == 0 and j > 1:
+                    print(f"Processed {j}/{len(all_xml_parts)}...")
+                if len(xml) <= 2000:
+                    pass
+                s_tags = re.findall(r"<s\d+>.*?</s\d+>", xml)
+                if len(s_tags) > 0 or '<sequence-cwu id="SEQLST-0">' in xml:
+                    pass
+
+                heading = extract_experiments_w_heading(xml)
+
+                # Process examples based on heading presence
+                if heading and len(heading) == 1:
+                    found_heading += 1
+                    examples = extract_examples_start_w_word(
+                        heading[0].find_next_siblings()
+                    )
+                    if len(examples) == 0:
+                        soup = BeautifulSoup(xml, "xml")
+                        siblings = soup.find_all(["heading", "p"])
+                        examples = extract_examples_start_w_word(siblings)
+                else:
+                    not_found_heading += 1
+                    soup = BeautifulSoup(xml, "xml")
+                    siblings = soup.find_all(["heading", "p"])
+                    examples = extract_examples_start_w_word(siblings)
+
+                if len(examples) > 0:
+                    doc_num = remove_leadiong_zeros(find_doc_number(xml)[0])
+                    doc_w_exp[doc_num] = examples
+            print(
+                f"\nExtracted examples from {len(doc_w_exp)} patents out of {total_num_of_patents} patents"
+            )
+            print("\nClassifying  Examples ......")
+            try:
+                with_tense = dic_to_dic_w_tense_test(doc_w_exp)
+                print("Classified examples successfully")
+            except Exception as e:
+                print(f"Error classifying examples: {e}")
+            print("\nStoring Examples in Database ......")
+            try:
+                store_patent_examples(doc_w_exp)
+                store_patent_statistics(with_tense)
+                print("Stored examples in database successfully")
+            except Exception as e:
+                print(f"Error storing examples in database: {e}")
 
 
 def extract_num_dot_examples(text):
@@ -464,10 +545,16 @@ def extract_examples_start_w_word(xml_siblings):
                     "content": [],
                 }
                 examples.append(current_example)
-            else:
-                # If we hit any other heading, stop collecting content
-                in_example = False
-        elif in_example and tag.name == "p" and current_example is not None:
+        elif tag.name == "heading" and (
+            tag.text.strip().lower().startswith("example")
+            or tag.text.strip().lower().startswith("experiment")
+            or tag.text.strip().lower().startswith("test")
+        ):
+            in_example = False
+        # else:
+        #     # If we hit any other heading, stop collecting content
+        #     in_example = False
+        elif in_example and current_example is not None:
             current_example["content"].append(tag.text.strip())
 
     return examples
@@ -485,10 +572,10 @@ def extract_examples_w_word(text):
             keyword in tag.text.strip().lower().replace(" ", "")
             for keyword in ["example", "experiment", "test"]
         )
-        and not any(
-            excluded in tag.text.strip().lower().replace(" ", "")
-            for excluded in ["reference", "preparation"]
-        )
+        # and not any(
+        #     excluded in tag.text.strip().lower().replace(" ", "")
+        #     for excluded in ["reference", "preparation"]
+        # )
     )
 
     for heading in example_headings:
@@ -510,10 +597,10 @@ def extract_examples_w_word(text):
                 keyword in sibling.text.strip().lower().replace(" ", "")
                 for keyword in ["example", "experiment", "test"]
             )
-            and not any(
-                excluded in sibling.text.strip().lower().replace(" ", "")
-                for excluded in ["reference", "preparation"]
-            )
+            # and not any(
+            #     excluded in sibling.text.strip().lower().replace(" ", "")
+            #     for excluded in ["reference", "preparation"]
+            # )
         ):
             if sibling.name == "p":
                 current_content.append(sibling.text.strip())
@@ -538,10 +625,10 @@ def process_siblings(xml_siblings):
             keyword in tag.text.strip().lower().replace(" ", "")
             for keyword in ["example", "experiment", "test"]
         )
-        and not any(
-            excluded in tag.text.strip().lower().replace(" ", "")
-            for excluded in ["reference", "preparation"]
-        )
+        # and not any(
+        #     excluded in tag.text.strip().lower().replace(" ", "")
+        #     for excluded in ["reference", "preparation"]
+        # )
     ]
 
     for heading in example_headings:
@@ -562,10 +649,10 @@ def process_siblings(xml_siblings):
                     keyword in xml_siblings[i].text.strip().lower().replace(" ", "")
                     for keyword in ["example", "experiment", "test"]
                 )
-                and not any(
-                    excluded in xml_siblings[i].text.strip().lower().replace(" ", "")
-                    for excluded in ["reference", "preparation"]
-                )
+                # and not any(
+                #     excluded in xml_siblings[i].text.strip().lower().replace(" ", "")
+                #     for excluded in ["reference", "preparation"]
+                # )
             ):
                 break
             if xml_siblings[i].name == "p":
