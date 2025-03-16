@@ -3,7 +3,7 @@ from utilities.utils_clean import (
     unzip_files,
     extract_and_save_examples_in_db,
     validate_year,
-    validate_default_kind,
+    validate_kind,
 )
 import os
 import argparse
@@ -22,7 +22,7 @@ def validate_path(path):
 
 def process_year(year, kind, base_path):
     """Process a single year of patent data."""
-    downloaded, download_path = download_patents_pto(year=year, default_kind=kind)
+    downloaded, download_path = download_patents_pto(year=year, kind=kind)
     if downloaded:
         unzip_path = os.path.join(base_path, f"patent_{kind}s_{year}")
         unzip_files(download_path, unzip_path)
@@ -37,7 +37,7 @@ def main():
     )
     parser.add_argument(
         "--kind",
-        type=validate_default_kind,
+        type=validate_kind,
         default="grant",
         help="application or grant",
     )
