@@ -15,3 +15,5 @@ EN_ipc_title_list_20250101
 *.csv
 *.pkl
 *.db
+app/build
+app/dist
