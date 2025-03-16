@@ -309,29 +309,47 @@ def extract_and_save_examples_in_db(folder_path, callback=None, stop_event=None)
             # Store data after processing each file
             if doc_w_exp:
                 if callback:
-                    callback("Classifying examples from current file...")
+                    callback(f"Found {len(doc_w_exp)} patents with examples")
                 try:
-                    with_tense = dic_to_dic_w_tense_test(doc_w_exp)
                     if callback:
-                        callback("Successfully classified examples from current file")
-                except Exception as e:
-                    if callback:
-                        callback(f"Error classifying examples in current file: {e}")
-                    continue
+                        callback("Starting tense classification...")
 
-                if callback:
-                    callback("Storing examples from current file in database...")
-                try:
-                    store_patent_examples(doc_w_exp)
-                    store_patent_statistics(with_tense)
-                    total_examples_extracted += len(doc_w_exp)
+                    with_tense = dic_to_dic_w_tense_test(doc_w_exp)
+
                     if callback:
                         callback(
-                            f"Successfully stored {len(doc_w_exp)} examples from current file"
+                            f"Classification complete, found {len(with_tense)} results"
                         )
+                        # Verify structure of tense data
+                        if with_tense:
+                            sample_key = next(iter(with_tense.keys()))
+                            sample_value = with_tense[sample_key]
+                            callback(
+                                f"Sample tense data: Patent {sample_key} → {sample_value}"
+                            )
+
+                    # Ensure data has expected structure before storage
+                    if with_tense:
+                        if callback:
+                            callback(
+                                f"Storing {len(with_tense)} patent statistics records..."
+                            )
+                        store_patent_examples(doc_w_exp)
+                        store_patent_statistics(with_tense)
+                        total_examples_extracted += len(doc_w_exp)
+                    else:
+                        if callback:
+                            callback(
+                                "No tense data was generated, skipping database storage"
+                            )
+
                 except Exception as e:
                     if callback:
-                        callback(f"Error storing examples from current file: {e}")
+                        callback(f"Error during tense classification: {str(e)}")
+                    import traceback
+
+                    if callback:
+                        callback(traceback.format_exc())
 
     if callback:
         callback(

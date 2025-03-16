@@ -216,6 +216,9 @@ class PatentDownloaderGUI:
         self.toggle_year_inputs()
         self.active_thread = None  # Track the active operation thread
 
+        # Track pagination state for each table
+        self.pagination_states = {}
+
     def update_log(self, message):
         """Add log message to the queue"""
         if "ERROR" in message:
@@ -696,71 +699,63 @@ class PatentDownloaderGUI:
 
     def view_database_tables(self):
         """Open a new window to view database tables."""
-        db_window = tk.Toplevel(self.root)
-        db_window.title("Database Tables")
-        db_window.geometry("800x600")
+        try:
+            # First verify database connection and tables
+            with sqlite3.connect("db/patents.db") as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+                print(f"Tables in database: {tables}")  # Debug info
 
-        # Store window reference for refreshing
-        self.db_window = db_window
+                # Check if patent_statistics exists and has data
+                for table in ["patent_examples", "patent_statistics"]:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                    )
+                    exists = cursor.fetchone()[0] > 0
+                    print(f"Table {table} exists: {exists}")
 
-        notebook = ttk.Notebook(db_window)
-        notebook.pack(fill=tk.BOTH, expand=True)
+                    if exists:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        count = cursor.fetchone()[0]
+                        print(f"Table {table} has {count} rows")
 
-        # Create frames for each table
-        examples_frame = ttk.Frame(notebook)
-        self.statistics_frame = ttk.Frame(notebook)  # Store reference for refreshing
+                        # Show sample data
+                        if count > 0:
+                            cursor.execute(f"SELECT * FROM {table} LIMIT 1")
+                            sample = cursor.fetchone()
+                            print(f"Sample from {table}: {sample}")
 
-        notebook.add(examples_frame, text="Patent Examples")
-        notebook.add(self.statistics_frame, text="Patent Statistics")
+            # Now create the GUI
+            db_window = tk.Toplevel(self.root)
+            db_window.title("Database Tables")
+            db_window.geometry("800x600")
 
-        # Store notebook reference
-        self.db_notebook = notebook
+            notebook = ttk.Notebook(db_window)
+            notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Add treeviews to display tables
-        self.create_table_view(examples_frame, "patent_examples")
-        self.create_table_view(self.statistics_frame, "patent_statistics")
+            # Create frames for each table
+            examples_frame = ttk.Frame(notebook)
+            statistics_frame = ttk.Frame(notebook)
+
+            notebook.add(examples_frame, text="Patent Examples")
+            notebook.add(statistics_frame, text="Patent Statistics")
+
+            # Add treeviews to display tables
+            self.create_table_view(examples_frame, "patent_examples")
+            self.create_table_view(statistics_frame, "patent_statistics")
+
+        except Exception as e:
+            self.log_queue.put(f"Error viewing database: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
 
     def create_table_view(self, parent_frame, table_name):
         """Create a styled treeview to display a database table."""
         # Create frame for treeview and scrollbars
         frame = ttk.Frame(parent_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # Ensure db directory exists
-        os.makedirs("./db", exist_ok=True)
-
-        # Check if the table exists before trying to display it
-        if not self.check_table_exists(table_name):
-            # Display a message indicating the table doesn't exist
-            message_frame = ttk.Frame(frame)
-            message_frame.pack(fill=tk.BOTH, expand=True)
-
-            message = f"The table '{table_name}' doesn't exist in the database yet.\n\n"
-            if table_name == "patent_statistics":
-                message += "This table will be created after running statistics analysis on patent data."
-            else:
-                message += "Please ensure you've processed patent data before viewing this table."
-
-            message_label = ttk.Label(
-                message_frame,
-                text=message,
-                font=("TkDefaultFont", 11),
-                wraplength=600,
-                justify=tk.CENTER,
-            )
-            message_label.pack(expand=True, pady=50)
-
-            # Add a button to create the statistics table if it's the statistics table
-            if table_name == "patent_statistics":
-                ttk.Button(
-                    message_frame,
-                    text="Generate Statistics",
-                    command=lambda: self.generate_statistics(
-                        parent_frame
-                    ),  # Pass frame for refresh
-                ).pack(pady=10)
-
-            return
 
         # Create treeview with scrollbars
         tree = ttk.Treeview(frame)
@@ -807,6 +802,7 @@ class PatentDownloaderGUI:
                     command=lambda c=col: self.sort_treeview(tree, c, False),
                 )
                 tree.column(col, width=0)  # Start with 0 width to calculate later
+                self.add_heading_tooltip(tree, col, col.replace("_", " ").title())
 
             # Fetch and insert data
             try:
@@ -817,46 +813,57 @@ class PatentDownloaderGUI:
             # Get total row count for pagination
             cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
             total_rows = cursor.fetchone()[0]
-            self.current_page = 0
-            self.page_size = rows_to_display
-            self.total_pages = (total_rows // rows_to_display) + (
-                1 if total_rows % rows_to_display > 0 else 0
-            )
+
+            # Initialize pagination state for this table
+            if table_name not in self.pagination_states:
+                self.pagination_states[table_name] = {
+                    "current_page": 0,
+                    "page_size": rows_to_display,
+                    "total_pages": max(
+                        1, (total_rows + rows_to_display - 1) // rows_to_display
+                    ),
+                }
 
             # Create pagination frame
             pagination_frame = ttk.Frame(parent_frame)
             pagination_frame.pack(fill=tk.X, padx=5, pady=5)
 
+            # Each button captures the current tree and table_name
             ttk.Button(
                 pagination_frame,
                 text="<<",
-                command=lambda: self.change_page(table_name, tree, 0),
+                command=lambda t=tree, tn=table_name: self.change_page(tn, t, 0),
             ).pack(side=tk.LEFT, padx=5)
+
             ttk.Button(
                 pagination_frame,
                 text="<",
-                command=lambda: self.change_page(
-                    table_name, tree, self.current_page - 1
+                command=lambda t=tree, tn=table_name: self.change_page(
+                    tn, t, self.pagination_states[tn]["current_page"] - 1
                 ),
             ).pack(side=tk.LEFT, padx=5)
 
-            self.page_label = ttk.Label(
-                pagination_frame, text=f"Page 1 of {self.total_pages}"
+            # Store label in pagination state for updates
+            page_label = ttk.Label(
+                pagination_frame,
+                text=f"Page 1 of {self.pagination_states[table_name]['total_pages']}",
             )
-            self.page_label.pack(side=tk.LEFT, padx=5)
+            page_label.pack(side=tk.LEFT, padx=5)
+            self.pagination_states[table_name]["label"] = page_label
 
             ttk.Button(
                 pagination_frame,
                 text=">",
-                command=lambda: self.change_page(
-                    table_name, tree, self.current_page + 1
+                command=lambda t=tree, tn=table_name: self.change_page(
+                    tn, t, self.pagination_states[tn]["current_page"] + 1
                 ),
             ).pack(side=tk.LEFT, padx=5)
+
             ttk.Button(
                 pagination_frame,
                 text=">>",
-                command=lambda: self.change_page(
-                    table_name, tree, self.total_pages - 1
+                command=lambda t=tree, tn=table_name: self.change_page(
+                    tn, t, self.pagination_states[tn]["total_pages"] - 1
                 ),
             ).pack(side=tk.LEFT, padx=5)
 
@@ -906,180 +913,9 @@ class PatentDownloaderGUI:
                 header_width = default_font.measure(tree.heading(col)["text"]) + 20
                 tree.column(col, width=min(300, max(100, max_width, header_width)))
 
-        # Add tooltips for column headers - REPLACE THIS SECTION
+        # Add tooltips for column headers
         for col in columns:
-            self.setup_column_tooltip(tree, col, col.replace("_", " ").title())
-
-    def check_table_exists(self, table_name):
-        """Check if a table exists in the database."""
-        try:
-            # Ensure the database directory exists
-            os.makedirs("./db", exist_ok=True)
-
-            # Get absolute path to database
-            db_path = os.path.abspath("./db/patents.db")
-            self.update_log(f"Checking for table {table_name} in database at {db_path}")
-
-            # Check if database file exists
-            if not os.path.isfile(db_path):
-                self.update_log(f"Database file does not exist at {db_path}")
-                return False
-
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                    (table_name,),
-                )
-                result = cursor.fetchone() is not None
-                self.update_log(
-                    f"Table {table_name} {'exists' if result else 'does not exist'} in database"
-                )
-                return result
-        except sqlite3.Error as e:
-            self.update_log(f"SQLite error checking for table {table_name}: {str(e)}")
-            return False
-        except Exception as e:
-            self.update_log(f"Error checking for table {table_name}: {str(e)}")
-            return False
-
-    def generate_statistics(self, parent_frame=None):
-        """Generate statistics for patent data and create the statistics table."""
-        # Check if patent_examples table exists
-        db_path = os.path.abspath("./db/patents.db")
-        self.update_log(f"Using database at {db_path}")
-
-        if not self.check_table_exists("patent_examples"):
-            messagebox.showinfo(
-                "No Data",
-                "No patent examples found in database.\nPlease process patent data first before generating statistics.",
-            )
-            return
-
-        # Ask for confirmation
-        confirm = messagebox.askyesno(
-            "Generate Statistics",
-            "This will analyze the patent data and generate statistics.\nThis process may take some time. Continue?",
-        )
-
-        if not confirm:
-            return
-
-        # Start a thread to generate statistics
-        def run_statistics():
-            try:
-                self.log_queue.put("Generating patent statistics...")
-                self.stop_event.clear()
-
-                with sqlite3.connect(db_path) as conn:
-                    cursor = conn.cursor()
-
-                    # First drop the table if it already exists to refresh data
-                    cursor.execute("DROP TABLE IF EXISTS patent_statistics")
-
-                    # Create the patent_statistics table
-                    cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS patent_statistics (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        year INTEGER,
-                        kind TEXT,
-                        total_patents INTEGER,
-                        avg_claims_count REAL,
-                        avg_example_length REAL,
-                        most_common_words TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """)
-                    conn.commit()
-
-                    # Get years with data
-                    cursor.execute(
-                        "SELECT DISTINCT year FROM patent_examples ORDER BY year"
-                    )
-                    years = [row[0] for row in cursor.fetchall()]
-
-                    if not years:
-                        self.log_queue.put("No patent data found to analyze")
-                        return
-
-                    # Process each year
-                    for year in years:
-                        if self.stop_event.is_set():
-                            break
-
-                        self.log_queue.put(f"Analyzing patent data for year {year}...")
-
-                        # Calculate statistics for this year
-                        cursor.execute(
-                            """
-                        SELECT kind, COUNT(*) as total,
-                               AVG(LENGTH(example_text)) as avg_length
-                        FROM patent_examples 
-                        WHERE year = ?
-                        GROUP BY kind
-                        """,
-                            (year,),
-                        )
-
-                        stats_by_kind = cursor.fetchall()
-
-                        for kind, total, avg_length in stats_by_kind:
-                            # Insert into statistics table
-                            cursor.execute(
-                                """
-                            INSERT INTO patent_statistics 
-                            (year, kind, total_patents, avg_example_length)
-                            VALUES (?, ?, ?, ?)
-                            """,
-                                (year, kind, total, avg_length),
-                            )
-
-                    conn.commit()
-
-                    # Verify the table was created and has data
-                    cursor.execute("SELECT COUNT(*) FROM patent_statistics")
-                    count = cursor.fetchone()[0]
-                    self.log_queue.put(
-                        f"Added {count} statistics records to the database"
-                    )
-
-                    if not self.stop_event.is_set():
-                        self.log_queue.put(
-                            "Statistics generation completed successfully!"
-                        )
-
-                        # Refresh the statistics view in the main thread
-                        self.root.after(
-                            0, lambda: self.refresh_statistics_view(parent_frame)
-                        )
-
-            except Exception as e:
-                self.log_queue.put(f"ERROR: Failed to generate statistics: {str(e)}")
-                messagebox.showerror(
-                    "Error", f"Failed to generate statistics: {str(e)}"
-                )
-
-        self.active_thread = threading.Thread(target=run_statistics)
-        self.active_thread.start()
-
-    def refresh_statistics_view(self, parent_frame):
-        """Refresh the statistics view after generation."""
-        try:
-            # Clear the parent frame
-            for widget in parent_frame.winfo_children():
-                widget.destroy()
-
-            # Recreate the table view
-            self.create_table_view(parent_frame, "patent_statistics")
-
-            # Show success message
-            messagebox.showinfo(
-                "Success",
-                "Patent statistics have been generated.\nThe view has been refreshed with the new data.",
-            )
-        except Exception as e:
-            self.update_log(f"Error refreshing statistics view: {str(e)}")
-            messagebox.showerror("Error", f"Error refreshing view: {str(e)}")
+            self.create_header_tooltip(tree, col, col.replace("_", " ").title())
 
     def view_full_data(self, event, tree, table_name):
         """Display full data for the selected row in a new window."""
@@ -1256,71 +1092,74 @@ class PatentDownloaderGUI:
         # Close the tooltip after 1.5 seconds
         tooltip.after(1500, tooltip.destroy)
 
-    def setup_column_tooltip(self, tree, column, tooltip_text):
-        """Set up tooltips for treeview column headers using direct bindings."""
-        tooltip = None  # Variable to keep track of the current tooltip
+    def create_header_tooltip(self, tree, column, text):
+        """
+        DEPRECATED: This method was causing errors with unsupported events.
+        Use add_heading_tooltip instead.
+        """
+        pass  # Keep this for compatibility but don't use it
+
+    def add_heading_tooltip(self, tree, column, text):
+        """Add tooltip for column headers using a better approach."""
+
+        # Initialize the active_tooltip attribute if it doesn't exist
+        if not hasattr(tree, "active_tooltip"):
+            tree.active_tooltip = None
 
         def show_tooltip(event):
-            nonlocal tooltip
-            # Check if the mouse is over a column header
+            # Get the column the mouse is over
             region = tree.identify_region(event.x, event.y)
             if region == "heading":
-                # Get the column the mouse is over
-                column_id = tree.identify_column(event.x)
-                if column_id:
-                    # Get the column name from the column id (e.g., '#1' -> first column)
-                    col_idx = int(column_id[1:]) - 1
+                column = tree.identify_column(event.x)
+                if column:
+                    # Show tooltip near the cursor
+                    x, y = event.x_root + 10, event.y_root + 10
+                    tip = tk.Toplevel(tree)
+                    tip.wm_overrideredirect(True)
+                    tip.wm_geometry(f"+{x}+{y}")
+                    label = ttk.Label(
+                        tip,
+                        text=text,
+                        justify="left",
+                        background="#FFFFEA",
+                        relief="solid",
+                        borderwidth=1,
+                        font=("TkDefaultFont", 9, "normal"),
+                    )
+                    label.pack(padx=3, pady=2)
+
+                    # Safely destroy existing tooltip before creating new one
                     if (
-                        col_idx >= 0
-                        and col_idx < len(tree["columns"])
-                        and tree["columns"][col_idx] == column
+                        hasattr(tree, "active_tooltip")
+                        and tree.active_tooltip is not None
                     ):
-                        # Show tooltip if mouse is over the target column
-                        x, y = event.x_root, event.y_root
-                        tooltip = tk.Toplevel(tree)
-                        tooltip.wm_overrideredirect(True)
-                        tooltip.wm_geometry(f"+{x + 10}+{y + 10}")
-                        tooltip.wm_attributes("-topmost", True)
-                        label = ttk.Label(
-                            tooltip,
-                            text=tooltip_text,
-                            justify="left",
-                            background="#FFFFEA",
-                            relief="solid",
-                            borderwidth=1,
-                            font=("TkDefaultFont", 9, "normal"),
-                            padding=(5, 3),
-                        )
-                        label.pack()
+                        try:
+                            tree.active_tooltip.destroy()
+                        except:
+                            pass
+
+                    tree.active_tooltip = tip
+
+                    # Auto-close tooltip after 3 seconds
+                    tree.after(3000, lambda: self.safely_destroy_tooltip(tip))
 
         def hide_tooltip(event):
-            nonlocal tooltip
-            if tooltip:
-                tooltip.destroy()
-                tooltip = None
+            # Safely destroy tooltip if it exists
+            if hasattr(tree, "active_tooltip") and tree.active_tooltip is not None:
+                self.safely_destroy_tooltip(tree.active_tooltip)
+                tree.active_tooltip = None
 
-        def on_motion(event):
-            nonlocal tooltip
-            # Hide tooltip if mouse moves away from the column header
-            region = tree.identify_region(event.x, event.y)
-            if region != "heading":
-                hide_tooltip(event)
-            else:
-                # Check if mouse moved to a different column
-                column_id = tree.identify_column(event.x)
-                if column_id:
-                    col_idx = int(column_id[1:]) - 1
-                    if (
-                        col_idx < 0
-                        or col_idx >= len(tree["columns"])
-                        or tree["columns"][col_idx] != column
-                    ):
-                        hide_tooltip(event)
-
-        # Bind events to the treeview
-        tree.bind("<Motion>", on_motion)
-        tree.bind("<Enter>", show_tooltip)
+        # Use <Motion> event which is supported
+        tree.bind("<Motion>", show_tooltip)
         tree.bind("<Leave>", hide_tooltip)
+
+    def safely_destroy_tooltip(self, tooltip):
+        """Safely destroy a tooltip window if it exists and is valid."""
+        try:
+            if tooltip and tooltip.winfo_exists():
+                tooltip.destroy()
+        except:
+            pass  # Ignore any errors during tooltip destruction
 
     def load_table_data(self, table_name, tree, page, page_size):
         """Load a specific page of data into the treeview."""
@@ -1331,27 +1170,42 @@ class PatentDownloaderGUI:
         offset = page * page_size
 
         # Connect to database and fetch data
-        with sqlite3.connect("./db/patents.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT * FROM {table_name} LIMIT {page_size} OFFSET {offset}"
-            )
-            rows = cursor.fetchall()
+        try:
+            with sqlite3.connect("./db/patents.db") as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT * FROM {table_name} LIMIT {page_size} OFFSET {offset}"
+                )
+                rows = cursor.fetchall()
 
-            # Insert rows with alternating colors
-            for i, row in enumerate(rows):
-                tag = "evenrow" if i % 2 == 0 else "oddrow"
-                tree.insert("", tk.END, values=row, tags=(tag,))
+                # Insert rows with alternating colors
+                for i, row in enumerate(rows):
+                    tag = "evenrow" if i % 2 == 0 else "oddrow"
+                    tree.insert("", tk.END, values=row, tags=(tag,))
 
-        # Update page label
-        self.current_page = page
-        if hasattr(self, "page_label"):
-            self.page_label.config(text=f"Page {page + 1} of {self.total_pages}")
+            # Update page label and state
+            if table_name in self.pagination_states:
+                state = self.pagination_states[table_name]
+                state["current_page"] = page
+
+                if "label" in state:
+                    state["label"].config(
+                        text=f"Page {page + 1} of {state['total_pages']}"
+                    )
+
+                # self.log_queue.put(f"Changed to page {page + 1} for {table_name}")
+        except Exception as e:
+            self.log_queue.put(f"Error loading table data: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
 
     def change_page(self, table_name, tree, page):
         """Navigate to a specific page of data."""
-        if 0 <= page < self.total_pages:
-            self.load_table_data(table_name, tree, page, self.page_size)
+        if table_name in self.pagination_states:
+            state = self.pagination_states[table_name]
+            if 0 <= page < state["total_pages"]:
+                self.load_table_data(table_name, tree, page, state["page_size"])
 
     def search_table(self, table_name, tree, columns):
         """Search for data in the table."""

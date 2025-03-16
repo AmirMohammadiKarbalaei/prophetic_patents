@@ -747,17 +747,27 @@ def extract_classify_num_patents_w_experiments_w_subclass(
                             }
 
                         if extract_experiments_w_heading(xml):
-                            subclass_dict[subclass_name]["examples"] += 1
+                            subclass_dict[subclass_name]["with_examples"] += (
+                                1  # Fixed key name
+                            )
                         else:
                             subclass_dict[subclass_name]["without_examples"] += 1
 
                 except IndexError:
                     continue
             if i == 0:
-                start = file_names.split("a")[1].split(".")[0]
-                end = start
+                try:
+                    start = file_names[i].split("a")[1].split(".")[0]
+                    end = start
+                except (IndexError, AttributeError):
+                    # Fallback if file naming is inconsistent
+                    start = str(i)
+                    end = start
             else:
-                end = file_names.split("a")[1].split(".")[0]
+                try:
+                    end = file_names[i].split("a")[1].split(".")[0]
+                except (IndexError, AttributeError):
+                    end = str(i)
 
             save_as_json(
                 subclass_dict,
