@@ -701,7 +701,7 @@ class PatentDownloaderGUI:
         """Open a new window to view database tables."""
         try:
             # First verify database connection and tables
-            with sqlite3.connect("db/patents.db") as conn:
+            with sqlite3.connect("./db/patents.db") as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = cursor.fetchall()
@@ -753,7 +753,7 @@ class PatentDownloaderGUI:
 
     def create_table_view(self, parent_frame, table_name):
         """Create a styled treeview to display a database table."""
-        # Create frame for treeview and scrollbars
+        # Create frame for treeview and scrollbarss
         frame = ttk.Frame(parent_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
