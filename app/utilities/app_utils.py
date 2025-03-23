@@ -404,7 +404,7 @@ async def create_processing_pipeline(file_info, folder_path, processor, callback
 
             if callback:
                 callback(
-                    f"Completed {file_name} - Found {len(doc_w_exp)} patents with examples"
+                    f"Saved {len(doc_w_exp)} patents with examples into db from {file_name}"
                 )
 
             return len(doc_w_exp)
