@@ -71,9 +71,9 @@ class PatentDownloaderGUI:
         # Log frame (moved to row 9 to make room for new buttons)
         log_frame = ttk.LabelFrame(main_frame, text="Log Messages", padding="5")
         log_frame.grid(
-            row=9, column=0, columnspan=2, sticky=(tk.N, tk.S, tk.E, tk.W), pady=5
+            row=10, column=0, columnspan=2, sticky=(tk.N, tk.S, tk.E, tk.W), pady=5
         )
-        main_frame.grid_rowconfigure(9, weight=1)
+        main_frame.grid_rowconfigure(10, weight=1)
         main_frame.grid_columnconfigure(0, weight=1)
 
         self.log_text = tk.Text(
@@ -160,10 +160,10 @@ class PatentDownloaderGUI:
         )
 
         # Progress
-        self.progress_var = tk.StringVar(value="Ready")
-        ttk.Label(main_frame, textvariable=self.progress_var).grid(
-            row=4, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
-        )
+        # self.progress_var = tk.StringVar(value="Ready")
+        # ttk.Label(main_frame, textvariable=self.progress_var).grid(
+        #     row=4, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
+        # )
 
         # Operation Buttons - Download, Unzip, Process separately
         ttk.Button(
@@ -183,25 +183,35 @@ class PatentDownloaderGUI:
             row=7, column=1, columnspan=1, pady=5, sticky=tk.N + tk.S + tk.E + tk.W
         )
 
+        # Add concurrent files control before the log frame
+        concurrency_frame = ttk.Frame(main_frame)
+        concurrency_frame.grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Label(concurrency_frame, text="Concurrent Files:").pack(side=tk.LEFT)
+        self.concurrent_files = tk.StringVar(value="4")  # Default to 4
+        ttk.Entry(concurrency_frame, textvariable=self.concurrent_files, width=5).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Label(concurrency_frame, text="(1-8 recommended)").pack(side=tk.LEFT)
+
         # Full Operation Button (all steps at once)
         ttk.Button(
             main_frame, text="Run Complete Process", command=self.download_patents
-        ).grid(row=8, column=0, columnspan=2, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+        ).grid(row=9, column=0, columnspan=2, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
 
         # Add a new button to view database tables
         ttk.Button(
             main_frame, text="View Database Tables", command=self.view_database_tables
         ).grid(
-            row=10, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
+            row=11, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
         )
 
         # Add an entry to set the number of rows to display
         ttk.Label(main_frame, text="Rows to Display:").grid(
-            row=11, column=0, sticky=tk.E, pady=5
+            row=12, column=0, sticky=tk.E, pady=5
         )
         self.rows_to_display = tk.StringVar(value="10")
         ttk.Entry(main_frame, textvariable=self.rows_to_display, width=6).grid(
-            row=11, column=1, sticky=tk.W, pady=5
+            row=12, column=1, sticky=tk.W, pady=5
         )
 
         self.log_queue = queue.Queue()
@@ -309,6 +319,18 @@ class PatentDownloaderGUI:
             # Validate kind
             kind = self.kind_var.get()
             validate_kind(kind)
+
+            # Validate concurrent files
+            try:
+                concurrent = int(self.concurrent_files.get())
+                if concurrent < 1:
+                    raise ValueError("Concurrent files must be at least 1")
+                if concurrent > 16:  # Set a reasonable upper limit
+                    raise ValueError("Maximum 16 concurrent files allowed")
+            except ValueError as e:
+                if "concurrent files" in str(e):
+                    raise
+                raise ValueError("Invalid concurrent files value")
 
             return True
 
@@ -479,6 +501,9 @@ class PatentDownloaderGUI:
                                 unzip_path,
                                 callback=self.update_log,
                                 stop_event=self.stop_event,  # Add this line
+                                max_workers=int(
+                                    self.concurrent_files.get()
+                                ),  # Add this parameter
                             )
                             self.log_queue.put(f"Processing complete for year {year}")
                             success_count += 1
@@ -668,6 +693,9 @@ class PatentDownloaderGUI:
                             unzip_path,
                             callback=self.update_log,
                             stop_event=self.stop_event,
+                            max_workers=int(
+                                self.concurrent_files.get()
+                            ),  # Add this parameter
                         )
                         success_count += 1
                         self.log_queue.put(
