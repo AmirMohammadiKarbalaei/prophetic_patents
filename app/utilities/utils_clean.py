@@ -531,24 +531,24 @@ def extract_experiments_w_heading(text):
 
     return examples_headings
 
-
 def extract_examples_start_w_word_all(xml_siblings):
+    def is_example_heading(text):
+        """Check if the heading matches example-related keywords."""
+        keywords = ["example", "experiment", "test", "trial"]
+        text_lower = text.strip().lower()
+        return any(keyword in text_lower for keyword in keywords) and not any(
+            text_lower == plural for plural in ["examples", "experiments", "tests"]
+        )
+
     examples = []
     current_example = None
     in_example = False
 
     for tag in xml_siblings:
+        j = 0
         if tag.name == "heading":
-            if (
-                tag.text.strip().lower().startswith("example")
-                or tag.text.strip().lower().startswith("experiment")
-                or tag.text.strip().lower().startswith("test")
-                or tag.text.strip().lower().startswith("trial")
-                or "test" in tag.text.strip().lower()
-                or "experiment" in tag.text.strip().lower()
-                or "example" in tag.text.strip().lower()
-                or "trial" in tag.text.strip().lower()
-            ):
+            text_lower = tag.text.strip().lower()
+            if is_example_heading(tag.text):
                 in_example = True
                 current_example = {
                     "number": tag.text.strip(),
@@ -556,28 +556,59 @@ def extract_examples_start_w_word_all(xml_siblings):
                     "content": [],
                 }
                 examples.append(current_example)
-        elif (
-            tag.name == "heading"
-            and tag.text.strip().lower() == "exampels"
-            and (
-                tag.text.strip().lower().startswith("example")
-                or tag.text.strip().lower().startswith("experiment")
-                or tag.text.strip().lower().startswith("test")
-                or tag.text.strip().lower().startswith("trial")
-                or "test" in tag.text.strip().lower()
-                or "experiment" in tag.text.strip().lower()
-                or "example" in tag.text.strip().lower()
-                or "trial" in tag.text.strip().lower()
-            )
-        ):
-            in_example = False
-        # else:
-        #     # If we hit any other heading, stop collecting content
-        #     in_example = False
-        elif in_example and current_example is not None:
+            elif text_lower == "exampels":  # Handle specific typo case
+                in_example = False
+        elif in_example and current_example is not None and j <= 3:
             current_example["content"].append(tag.text.strip())
+            j+=1
 
     return examples
+# def extract_examples_start_w_word_all(xml_siblings):
+#     examples = []
+#     current_example = None
+#     in_example = False
+
+#     for tag in xml_siblings:
+#         if tag.name == "heading":
+#             if (
+#                 tag.text.strip().lower().startswith("example")
+#                 or tag.text.strip().lower().startswith("experiment")
+#                 or tag.text.strip().lower().startswith("test")
+#                 or tag.text.strip().lower().startswith("trial")
+#                 or "test" in tag.text.strip().lower()
+#                 or "experiment" in tag.text.strip().lower()
+#                 or "example" in tag.text.strip().lower()
+#                 or "trial" in tag.text.strip().lower()
+#             ) and not any(tag.text.strip().lower().startswith("examples") or tag.text.strip().lower().startswith("experiments") or tag.text.strip().lower().startswith("tests") for tag in xml_siblings):
+#                 in_example = True
+#                 current_example = {
+#                     "number": tag.text.strip(),
+#                     "title": xml_siblings[xml_siblings.index(tag) + 1].text.strip(),
+#                     "content": [],
+#                 }
+#                 examples.append(current_example)
+#         elif (
+#             tag.name == "heading"
+#             and tag.text.strip().lower() == "exampels"
+#             and (
+#                 tag.text.strip().lower().startswith("example")
+#                 or tag.text.strip().lower().startswith("experiment")
+#                 or tag.text.strip().lower().startswith("test")
+#                 or tag.text.strip().lower().startswith("trial")
+#                 or "test" in tag.text.strip().lower()
+#                 or "experiment" in tag.text.strip().lower()
+#                 or "example" in tag.text.strip().lower()
+#                 or "trial" in tag.text.strip().lower()
+#             ) and not any(tag.text.strip().lower().startswith("examples") or tag.text.strip().lower().startswith("experiments") or tag.text.strip().lower().startswith("tests") for tag in xml_siblings)
+#         ):
+#             in_example = False
+#         # else:
+#         #     # If we hit any other heading, stop collecting content
+#         #     in_example = False
+#         elif in_example and current_example is not None:
+#             current_example["content"].append(tag.text.strip())
+
+#     return examples
 
 
 def extract_examples_start_w_word(xml_siblings):

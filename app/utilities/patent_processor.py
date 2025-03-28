@@ -28,14 +28,14 @@ class PatentProcessor:
             loop = asyncio.get_running_loop()
 
             # Fast pre-check for examples section
-            if "EXAMPLES" not in xml.upper() and "EXPERIMENTS" not in xml.upper():
+            if all(i not in xml.upper() for i in ["EXAMPLES", "EXPERIMENTS", "TESTS"]):
                 return None
 
             # Check for sequence listings
             has_sequences = await loop.run_in_executor(
                 self.thread_pool,
                 lambda: bool(re.findall(r"<s\d+>.*?</s\d+>", xml))
-                or '<sequence-cwu id="SEQLST-0">' in xml,
+                or '<sequence-cwu id="SEQLST-0">' in xml or "<!DOCTYPE sequence-cwu" in xml,
             )
             if has_sequences:
                 return None
@@ -45,8 +45,8 @@ class PatentProcessor:
                 self.thread_pool, extract_experiments_w_heading, xml
             )
 
-            if not heading:
-                return None
+            # if not heading:
+            #     return None
 
             examples = []
             if heading and len(heading) == 1:

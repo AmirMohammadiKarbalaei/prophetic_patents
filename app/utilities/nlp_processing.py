@@ -12,7 +12,6 @@ nltk.download("punkt")
 nltk.download("averaged_perceptron_tagger_eng")
 # region tense analysis
 
-
 def analyze_sentence_tense(text, threshold=0.5):
     text = text.replace("  ", "").replace("\n", " ").replace("\t", " ")
 
@@ -29,57 +28,38 @@ def analyze_sentence_tense(text, threshold=0.5):
 
     verb_tenses = []
     reason_unknown = ""
-
-    # Time indicators (adverbs, phrases)
-    # future_time = {'tomorrow', 'soon', 'later', 'in the future'}
-    # past_time = {'yesterday', 'last', 'ago', 'previously', 'earlier'}
-    # present_time = {'now', 'currently', 'at the moment', 'as we speak'}
-
-    # Check for time-related words
     text_lower = text.lower()
-    # if any(word in text_lower for word in future_time):
-    #     verb_tenses.append('Future')
-    # if any(word in text_lower for word in past_time):
-    #     verb_tenses.append('Past')
-    # if any(word in text_lower for word in present_time):
-    #     verb_tenses.append('Present')
-    # if "was" in text_lower or "were" in text_lower:
-    #     return "past"
+    text_words = set(text_lower.split())  # Precompute words for faster lookup
 
     # Helper function to check for auxiliary/modal verbs
     def has_auxiliary(aux_list):
-        return any(aux in text_lower for aux in aux_list)
+        aux_set = set(aux_list)
+        return not aux_set.isdisjoint(text_words)
 
     # Iterate through words with their POS tags
     for i, (word, tag) in enumerate(tagged):
         if tag.startswith("VB"):  # Checking for verb forms
+            prev_word = tagged[i - 1][0].lower() if i > 0 else ""
+            prev_prev_word = tagged[i - 2][0].lower() if i > 1 else ""
+
             # Present Continuous: "is/are + VBG"
-            if tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["is", "are"]:
-                verb_tenses.append("Present")  ####
+            if tag == "VBG" and prev_word in {"is", "are"}:
+                verb_tenses.append("Present")
 
             # Past Continuous: "was/were + VBG"
-            elif tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["was", "were"]:
+            elif tag == "VBG" and prev_word in {"was", "were"}:
                 verb_tenses.append("Present")
 
             # Future Continuous: "will be + VBG"
-            elif (
-                tag == "VBG"
-                and i > 1
-                and tagged[i - 2][0].lower() == "will"
-                and tagged[i - 1][0].lower() == "be"
-            ):
+            elif tag == "VBG" and prev_prev_word == "will" and prev_word == "be":
                 verb_tenses.append("Present")
 
             # "Going to" Future: "am/is/are going to + VB"
-            elif (
-                word.lower() == "going"
-                and i < len(tagged) - 1
-                and tagged[i + 1][0].lower() == "to"
-            ):
+            elif word.lower() == "going" and i < len(tagged) - 1 and tagged[i + 1][0].lower() == "to":
                 verb_tenses.append("Present")
 
             # Future Simple: "will + VB"
-            elif i > 0 and tagged[i - 1][0].lower() == "will":
+            elif prev_word == "will":
                 verb_tenses.append("present")
 
             # Past Simple: "baked", "traveled" (VBD)
@@ -87,7 +67,7 @@ def analyze_sentence_tense(text, threshold=0.5):
                 verb_tenses.append("Past")
 
             # Present Simple: "walks", "runs", "eats" (VBP, VBZ)
-            elif tag in ["VBP", "VBZ"]:
+            elif tag in {"VBP", "VBZ"}:
                 verb_tenses.append("Present")
 
             # Past Participle: "was analyzed"
@@ -143,6 +123,121 @@ def analyze_sentence_tense(text, threshold=0.5):
         "breakdown_str": breakdown_str,
         "has_mixed": has_mixed_tenses,
     }
+# def analyze_sentence_tense(text, threshold=0.5):
+#     text = text.replace("  ", "").replace("\n", " ").replace("\t", " ")
+
+#     # Ensure required NLTK data is available
+#     try:
+#         nltk.data.find("taggers/averaged_perceptron_tagger")
+#     except LookupError:
+#         nltk.download("averaged_perceptron_tagger")
+#         nltk.download("punkt")
+
+#     # Tokenize and POS tag the text
+#     tokens = word_tokenize(text)
+#     tagged = pos_tag(tokens)
+
+#     verb_tenses = []
+#     reason_unknown = ""
+#     text_lower = text.lower()
+
+#     # Helper function to check for auxiliary/modal verbs
+#     def has_auxiliary(aux_list):
+#         return any(aux in text_lower for aux in aux_list)
+
+#     # Iterate through words with their POS tags
+#     for i, (word, tag) in enumerate(tagged):
+#         if tag.startswith("VB"):  # Checking for verb forms
+#             # Present Continuous: "is/are + VBG"
+#             if tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["is", "are"]:
+#                 verb_tenses.append("Present")  ####
+
+#             # Past Continuous: "was/were + VBG"
+#             elif tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["was", "were"]:
+#                 verb_tenses.append("Present")
+
+#             # Future Continuous: "will be + VBG"
+#             elif (
+#                 tag == "VBG"
+#                 and i > 1
+#                 and tagged[i - 2][0].lower() == "will"
+#                 and tagged[i - 1][0].lower() == "be"
+#             ):
+#                 verb_tenses.append("Present")
+
+#             # "Going to" Future: "am/is/are going to + VB"
+#             elif (
+#                 word.lower() == "going"
+#                 and i < len(tagged) - 1
+#                 and tagged[i + 1][0].lower() == "to"
+#             ):
+#                 verb_tenses.append("Present")
+
+#             # Future Simple: "will + VB"
+#             elif i > 0 and tagged[i - 1][0].lower() == "will":
+#                 verb_tenses.append("present")
+
+#             # Past Simple: "baked", "traveled" (VBD)
+#             elif tag == "VBD":
+#                 verb_tenses.append("Past")
+
+#             # Present Simple: "walks", "runs", "eats" (VBP, VBZ)
+#             elif tag in ["VBP", "VBZ"]:
+#                 verb_tenses.append("Present")
+
+#             # Past Participle: "was analyzed"
+#             elif tag == "VBN" and has_auxiliary(["was", "were"]):
+#                 verb_tenses.append("Past")
+
+#             # Present Perfect: "has analyzed"
+#             elif tag == "VBN" and has_auxiliary(["has", "have"]):
+#                 verb_tenses.append("Present")
+
+#             # Future Perfect: "will have analyzed"
+#             elif tag == "VBN" and has_auxiliary(["will have"]):
+#                 verb_tenses.append("Present")
+
+#     # If no tenses were found, return "unknown" with reason
+#     if not verb_tenses:
+#         reason_unknown = "no_verbs_found"
+#         return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
+
+#     # Use Counter to determine the most common tense
+#     tense_counts = Counter(verb_tenses)
+#     try:
+#         primary_tense = tense_counts.most_common(1)[0][0]
+#     except IndexError:
+#         reason_unknown = "no_primary_tense"
+#         return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
+
+#     # Confidence calculation
+#     total_verbs = sum(tense_counts.values())
+#     if total_verbs == 0:
+#         reason_unknown = "no_verbs_counted"
+#         return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
+
+#     # Calculate percentage breakdown of tenses
+#     tense_percentages = {
+#         tense: (count / total_verbs) * 100 for tense, count in tense_counts.items()
+#     }
+
+#     # Format breakdown string
+#     breakdown_str = ", ".join(
+#         [f"{tense}: {percent:.0f}%" for tense, percent in tense_percentages.items()]
+#     )
+
+#     # If there are multiple tenses with significant presence, consider it mixed
+#     has_mixed_tenses = (
+#         len([t for t, c in tense_counts.items() if c / total_verbs > 0.2]) > 1
+#     )
+
+#     return {
+#         "tense": primary_tense.lower(),
+#         "reason": "",
+#         "breakdown": tense_percentages,
+#         "breakdown_str": breakdown_str,
+#         "has_mixed": has_mixed_tenses,
+#     }
 
 
 def check_tense_nltk(sentence):
@@ -174,7 +269,6 @@ def process_text_for_tense(input_tuple):
 def dic_to_dic_w_tense_test(doc_w_exp, threshold=0):
     """Process patent examples with parallel tense analysis and track mixed tense data."""
     dic = {}
-    pattern = r"\(\d+\)\s*([A-Za-z0-9\-\(\)\{\},:;=\[\]\+\*\s\.\^\$\%]+(?:\.(?:sup|delta|Hz|NMR)[^\)]*)?)"
 
     # Calculate optimal workers for classification
     optimal_workers = max(
@@ -240,25 +334,18 @@ def dic_to_dic_w_tense_test(doc_w_exp, threshold=0):
                         if tense != "unknown":
                             tense_counts[tense] += 1
                         else:
-                            # Check for number patterns in unknown cases
-                            matches = re.findall(pattern, desc)
-                            if matches:
-                                tense_counts["past"] += 1
-                                # Update the example accordingly
-                                example["tense"] = "past"
-                                example["why_unknown"] = "pattern_matching_override"
-                            else:
-                                tense_counts["unknown"] += 1
+
+                            tense_counts["unknown"] += 1
 
                     # Calculate mixed tense percentage for this patent
                     mixed_tense_percentage = (
-                        (mixed_tense_count / total_examples * 100)
+                        round((mixed_tense_count / total_examples * 100),2)
                         if total_examples > 0
                         else 0
                     )
 
                     # Add mixed tense percentage to the stats
-                    tense_counts["mixed_tense_percentage"] = mixed_tense_percentage
+                    tense_counts["mixed_tense_percentage"] = f"{mixed_tense_percentage}%"
 
                     dic[key] = tense_counts
 
