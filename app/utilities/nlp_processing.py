@@ -9,7 +9,7 @@ import multiprocessing
 
 nltk.download("averaged_perceptron_tagger")
 nltk.download("punkt")
-nltk.download('averaged_perceptron_tagger_eng')
+nltk.download("averaged_perceptron_tagger_eng")
 # region tense analysis
 
 
@@ -28,6 +28,7 @@ def analyze_sentence_tense(text, threshold=0.5):
     tagged = pos_tag(tokens)
 
     verb_tenses = []
+    reason_unknown = ""
 
     # Time indicators (adverbs, phrases)
     # future_time = {'tomorrow', 'soon', 'later', 'in the future'}
@@ -101,34 +102,47 @@ def analyze_sentence_tense(text, threshold=0.5):
             elif tag == "VBN" and has_auxiliary(["will have"]):
                 verb_tenses.append("Present")
 
-    # If no tenses were found, return "unknown"
-    # if not verb_tenses:
-    #     return "past"
+    # If no tenses were found, return "unknown" with reason
+    if not verb_tenses:
+        reason_unknown = "no_verbs_found"
+        return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
 
     # Use Counter to determine the most common tense
     tense_counts = Counter(verb_tenses)
     try:
         primary_tense = tense_counts.most_common(1)[0][0]
     except IndexError:
-        return "unknown"
+        reason_unknown = "no_primary_tense"
+        return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
 
     # Confidence calculation
     total_verbs = sum(tense_counts.values())
-    # confidence = tense_counts.most_common(1)[0][1] / total_verbs
     if total_verbs == 0:
-        return "unknown"
-    # if total_verbs<10:
-    #     print(primary_tense)
-    #     print(text)
+        reason_unknown = "no_verbs_counted"
+        return {"tense": "unknown", "reason": reason_unknown, "breakdown": {}}
 
-    # If confidence is too low, return "unknown"
-    # if confidence < threshold:
-    #     # print(primary_tense)
-    #     # print(text)
+    # Calculate percentage breakdown of tenses
+    tense_percentages = {
+        tense: (count / total_verbs) * 100 for tense, count in tense_counts.items()
+    }
 
-    #     return "past"
+    # Format breakdown string
+    breakdown_str = ", ".join(
+        [f"{tense}: {percent:.0f}%" for tense, percent in tense_percentages.items()]
+    )
 
-    return primary_tense.lower()
+    # If there are multiple tenses with significant presence, consider it mixed
+    has_mixed_tenses = (
+        len([t for t, c in tense_counts.items() if c / total_verbs > 0.2]) > 1
+    )
+
+    return {
+        "tense": primary_tense.lower(),
+        "reason": "",
+        "breakdown": tense_percentages,
+        "breakdown_str": breakdown_str,
+        "has_mixed": has_mixed_tenses,
+    }
 
 
 def check_tense_nltk(sentence):
@@ -151,12 +165,18 @@ def check_tense_nltk(sentence):
     return max(tenses, key=tenses.get) if max(tenses.values()) > 0 else "Unknown"
 
 
+def process_text_for_tense(input_tuple):
+    """Process a text tuple for tense analysis, suitable for multiprocessing."""
+    idx, text = input_tuple
+    return (idx, analyze_sentence_tense(text))
+
+
 def dic_to_dic_w_tense_test(doc_w_exp, threshold=0):
-    """Process patent examples with parallel tense analysis."""
+    """Process patent examples with parallel tense analysis and track mixed tense data."""
     dic = {}
     pattern = r"\(\d+\)\s*([A-Za-z0-9\-\(\)\{\},:;=\[\]\+\*\s\.\^\$\%]+(?:\.(?:sup|delta|Hz|NMR)[^\)]*)?)"
 
-    # Calculate optimal workers for classification (use more CPU cores)
+    # Calculate optimal workers for classification
     optimal_workers = max(
         1, (multiprocessing.cpu_count() * 3) // 4
     )  # Use 75% of CPU cores
@@ -165,32 +185,80 @@ def dic_to_dic_w_tense_test(doc_w_exp, threshold=0):
     with ProcessPoolExecutor(max_workers=optimal_workers) as executor:
         for key, value in doc_w_exp.items():
             tense_counts = {"past": 0, "present": 0, "unknown": 0}
+            mixed_tense_count = 0
+            total_examples = 0
 
             if isinstance(value, list):
-                # Prepare all texts for parallel processing
-                texts_to_analyze = []
+                # Add tense info to examples
                 for example in value:
                     desc = example["title"] + "." + "".join(example["content"])
                     if len(desc) > threshold:
-                        texts_to_analyze.append(desc)
+                        total_examples += 1
+
+                # Prepare all texts for parallel processing
+                texts_to_analyze = []
+                for i, example in enumerate(value):
+                    desc = example["title"] + "." + "".join(example["content"])
+                    if len(desc) > threshold:
+                        texts_to_analyze.append((i, desc))
 
                 # Process all texts in parallel
                 if texts_to_analyze:
+                    # Use the standalone function instead of lambda
                     results = list(
-                        executor.map(analyze_sentence_tense, texts_to_analyze)
+                        executor.map(process_text_for_tense, texts_to_analyze)
                     )
 
-                    # Aggregate results
-                    for i, tense in enumerate(results):
+                    # Aggregate results and update examples with tense details
+                    for idx, tense_info in results:
+                        example = value[idx]
+
+                        # Get tense from result
+                        tense = tense_info["tense"]
+
+                        # Store tense analysis details in the example
+                        example["tense"] = tense
+
+                        # Make sure to properly set the reason for unknown tenses
+                        if tense == "unknown":
+                            example["why_unknown"] = tense_info.get(
+                                "reason", "no_reason_provided"
+                            )
+                        else:
+                            example["why_unknown"] = (
+                                ""  # Clear field for non-unknown tenses
+                            )
+
+                        example["tense_breakdown"] = tense_info.get("breakdown_str", "")
+
+                        # Track if this example has mixed tenses
+                        has_mixed = tense_info.get("has_mixed", False)
+                        if has_mixed:
+                            mixed_tense_count += 1
+
+                        # Update tense counts
                         if tense != "unknown":
                             tense_counts[tense] += 1
                         else:
                             # Check for number patterns in unknown cases
-                            matches = re.findall(pattern, texts_to_analyze[i])
+                            matches = re.findall(pattern, desc)
                             if matches:
                                 tense_counts["past"] += 1
+                                # Update the example accordingly
+                                example["tense"] = "past"
+                                example["why_unknown"] = "pattern_matching_override"
                             else:
                                 tense_counts["unknown"] += 1
+
+                    # Calculate mixed tense percentage for this patent
+                    mixed_tense_percentage = (
+                        (mixed_tense_count / total_examples * 100)
+                        if total_examples > 0
+                        else 0
+                    )
+
+                    # Add mixed tense percentage to the stats
+                    tense_counts["mixed_tense_percentage"] = mixed_tense_percentage
 
                     dic[key] = tense_counts
 

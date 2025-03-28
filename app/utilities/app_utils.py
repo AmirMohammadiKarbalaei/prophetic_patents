@@ -307,7 +307,7 @@ async def process_file_async(file_info, folder_path, callback=None):
         return file, 0, []
 
 
-async def process_files_parallel(folder_path, callback=None, max_workers=4):
+async def process_files_parallel(folder_path, callback=None, max_workers=4, year=None):
     """Process multiple XML files using concurrent pipelines."""
     start_time = time.time()
 
@@ -327,10 +327,10 @@ async def process_files_parallel(folder_path, callback=None, max_workers=4):
         batch = file_names[i : i + max_workers]
         current_tasks = []
 
-        # Create concurrent pipelines for each file in batch
+        # Create concurrent pipelines for each file in batch - pass the year
         for j, file in enumerate(batch):
             pipeline = create_processing_pipeline(
-                (i + j, file), folder_path, processor, callback
+                (i + j, file), folder_path, processor, callback, year
             )
             current_tasks.append(pipeline)
 
@@ -362,7 +362,9 @@ async def process_files_parallel(folder_path, callback=None, max_workers=4):
     return grand_total, []
 
 
-async def create_processing_pipeline(file_info, folder_path, processor, callback):
+async def create_processing_pipeline(
+    file_info, folder_path, processor, callback, year=None
+):
     """Create a complete processing pipeline for a single file."""
     try:
         # Stage 1: Extract patents from XML
@@ -373,6 +375,22 @@ async def create_processing_pipeline(file_info, folder_path, processor, callback
         file_name, count, xml_parts = file_result
         if callback:
             callback(f"\nProcessing {count} patents from {file_name}")
+
+        # Extract year from filename if not provided by user
+        file_year = year
+        if not file_year and file_name.startswith("ipg"):
+            # Extract 2-digit year from filename like ipg120110.xml
+            year_match = re.match(r"ipg(\d{2})\d{4}\.xml", file_name)
+            if year_match:
+                two_digit_year = int(year_match.group(1))
+                # Convert 2-digit year to 4-digit year
+                file_year = (
+                    2000 + two_digit_year
+                    if two_digit_year < 50
+                    else 1900 + two_digit_year
+                )
+                if callback:
+                    callback(f"Extracted year {file_year} from filename {file_name}")
 
         # Stage 2: Process patents
         doc_w_exp = await processor.process_batch(xml_parts, callback)
@@ -394,11 +412,14 @@ async def create_processing_pipeline(file_info, folder_path, processor, callback
                 max_workers=processor.max_workers
             ) as storage_executor:
                 await asyncio.gather(
+                    # Pass the enhanced examples with tense info to the storage function
                     loop.run_in_executor(
                         storage_executor, store_patent_examples, doc_w_exp
                     ),
+                    # Pass the year and enhanced statistics to store_patent_statistics
                     loop.run_in_executor(
-                        storage_executor, store_patent_statistics, with_tense
+                        storage_executor,
+                        lambda: store_patent_statistics(with_tense, year=file_year),
                     ),
                 )
 
@@ -423,11 +444,13 @@ async def process_batch(batch, callback=None):
 
 
 def extract_and_save_examples_in_db(
-    folder_path, callback=None, stop_event=None, max_workers=4
+    folder_path, callback=None, stop_event=None, max_workers=4, year=None
 ):
     """Extract and save examples with progress updates."""
     if callback:
         callback("Starting example extraction process...")
+        if year:
+            callback(f"Using year {year} from user input")
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -437,7 +460,8 @@ def extract_and_save_examples_in_db(
             process_files_parallel(
                 folder_path,
                 callback,
-                max_workers,  # Pass through the max_workers parameter
+                max_workers,
+                year,  # Pass the year parameter
             )
         )
 

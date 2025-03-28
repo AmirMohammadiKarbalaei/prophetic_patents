@@ -500,10 +500,9 @@ class PatentDownloaderGUI:
                             extract_and_save_examples_in_db(
                                 unzip_path,
                                 callback=self.update_log,
-                                stop_event=self.stop_event,  # Add this line
-                                max_workers=int(
-                                    self.concurrent_files.get()
-                                ),  # Add this parameter
+                                stop_event=self.stop_event,
+                                max_workers=int(self.concurrent_files.get()),
+                                year=year,  # Pass the year from user input
                             )
                             self.log_queue.put(f"Processing complete for year {year}")
                             success_count += 1
@@ -693,9 +692,8 @@ class PatentDownloaderGUI:
                             unzip_path,
                             callback=self.update_log,
                             stop_event=self.stop_event,
-                            max_workers=int(
-                                self.concurrent_files.get()
-                            ),  # Add this parameter
+                            max_workers=int(self.concurrent_files.get()),
+                            year=year,  # Pass the year from user input
                         )
                         success_count += 1
                         self.log_queue.put(
