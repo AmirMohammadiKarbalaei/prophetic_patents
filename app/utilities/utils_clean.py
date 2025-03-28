@@ -532,6 +532,54 @@ def extract_experiments_w_heading(text):
     return examples_headings
 
 
+def extract_examples_start_w_word_all(xml_siblings):
+    examples = []
+    current_example = None
+    in_example = False
+
+    for tag in xml_siblings:
+        if tag.name == "heading":
+            if (
+                tag.text.strip().lower().startswith("example")
+                or tag.text.strip().lower().startswith("experiment")
+                or tag.text.strip().lower().startswith("test")
+                or tag.text.strip().lower().startswith("trial")
+                or "test" in tag.text.strip().lower()
+                or "experiment" in tag.text.strip().lower()
+                or "example" in tag.text.strip().lower()
+                or "trial" in tag.text.strip().lower()
+            ):
+                in_example = True
+                current_example = {
+                    "number": tag.text.strip(),
+                    "title": xml_siblings[xml_siblings.index(tag) + 1].text.strip(),
+                    "content": [],
+                }
+                examples.append(current_example)
+        elif (
+            tag.name == "heading"
+            and tag.text.strip().lower() == "exampels"
+            and (
+                tag.text.strip().lower().startswith("example")
+                or tag.text.strip().lower().startswith("experiment")
+                or tag.text.strip().lower().startswith("test")
+                or tag.text.strip().lower().startswith("trial")
+                or "test" in tag.text.strip().lower()
+                or "experiment" in tag.text.strip().lower()
+                or "example" in tag.text.strip().lower()
+                or "trial" in tag.text.strip().lower()
+            )
+        ):
+            in_example = False
+        # else:
+        #     # If we hit any other heading, stop collecting content
+        #     in_example = False
+        elif in_example and current_example is not None:
+            current_example["content"].append(tag.text.strip())
+
+    return examples
+
+
 def extract_examples_start_w_word(xml_siblings):
     examples = []
     current_example = None

@@ -7,7 +7,7 @@ from .utils_clean import (
     remove_leadiong_zeros,
     find_doc_number,
     extract_experiments_w_heading,
-    extract_examples_start_w_word,
+    extract_examples_start_w_word_all,
 )
 
 
@@ -52,20 +52,20 @@ class PatentProcessor:
             if heading and len(heading) == 1:
                 examples = await loop.run_in_executor(
                     self.thread_pool,
-                    extract_examples_start_w_word,
+                    extract_examples_start_w_word_all,
                     heading[0].find_next_siblings(),
                 )
                 if not examples:
                     soup = BeautifulSoup(xml, "xml")
                     siblings = soup.find_all(["heading", "p"])
                     examples = await loop.run_in_executor(
-                        self.thread_pool, extract_examples_start_w_word, siblings
+                        self.thread_pool, extract_examples_start_w_word_all, siblings
                     )
             else:
                 soup = BeautifulSoup(xml, "xml")
                 siblings = soup.find_all(["heading", "p"])
                 examples = await loop.run_in_executor(
-                    self.thread_pool, extract_examples_start_w_word, siblings
+                    self.thread_pool, extract_examples_start_w_word_all, siblings
                 )
 
             if examples:
