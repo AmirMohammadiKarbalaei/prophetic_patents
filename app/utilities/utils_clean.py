@@ -531,38 +531,107 @@ def extract_experiments_w_heading(text):
 
     return examples_headings
 
+
 def extract_examples_start_w_word_all(xml_siblings):
+    """Extract examples from XML siblings with improved handling.
+
+    Args:
+        xml_siblings: List of XML sibling elements
+
+    Returns:
+        list: List of dictionaries containing example information
+    """
+    KEYWORDS = {"example", "experiment", "test", "trial"}
+    PLURALS = {"examples", "experiments", "tests", "trials"}
+    MAX_CONTENT_LENGTH = 4
+
     def is_example_heading(text):
-        """Check if the heading matches example-related keywords."""
-        keywords = ["example", "experiment", "test", "trial"]
+        """Check if heading indicates start of an example section."""
         text_lower = text.strip().lower()
-        return any(keyword in text_lower for keyword in keywords) and not any(
-            text_lower == plural for plural in ["examples", "experiments", "tests"]
+        return any(keyword in text_lower for keyword in KEYWORDS) and not any(
+            text_lower == plural for plural in PLURALS
         )
 
     examples = []
     current_example = None
-    in_example = False
 
-    for tag in xml_siblings:
-        j = 0
+    for i, tag in enumerate(xml_siblings):
+        if not hasattr(tag, "name") or not hasattr(tag, "text"):
+            continue
+
         if tag.name == "heading":
-            text_lower = tag.text.strip().lower()
-            if is_example_heading(tag.text):
-                in_example = True
-                current_example = {
-                    "number": tag.text.strip(),
-                    "title": xml_siblings[xml_siblings.index(tag) + 1].text.strip(),
-                    "content": [],
-                }
+            text = tag.text.strip()
+
+            # Check for example heading
+            if is_example_heading(text):
+                # Try to get title from next element
+                try:
+                    title = (
+                        xml_siblings[i + 1].text.strip()
+                        if i + 1 < len(xml_siblings)
+                        else ""
+                    )
+                except (AttributeError, IndexError):
+                    title = ""
+
+                current_example = {"number": text, "title": title, "content": []}
                 examples.append(current_example)
-            elif text_lower == "exampels":  # Handle specific typo case
-                in_example = False
-        elif in_example and current_example is not None and j <= 3:
-            current_example["content"].append(tag.text.strip())
-            j+=1
+
+            # Handle end of example section
+            elif text.lower() in PLURALS or text.lower() == "exampels":
+                current_example = None
+
+        # Collect content if in example section
+        elif (
+            current_example is not None
+            and len(current_example["content"]) < MAX_CONTENT_LENGTH
+        ):
+            try:
+                content = tag.text.strip()
+                if content:  # Only append non-empty content
+                    current_example["content"].append(content)
+            except AttributeError:
+                continue
 
     return examples
+
+
+# def extract_examples_start_w_word_all(xml_siblings):
+#     def is_example_heading(text):
+#         """Check if the heading matches example-related keywords."""
+#         keywords = ["example", "experiment", "test", "trial"]
+#         text_lower = text.strip().lower()
+#         return any(keyword in text_lower for keyword in keywords) and not any(
+#             text_lower == plural for plural in ["examples", "experiments", "tests"]
+#         )
+
+#     examples = []
+#     current_example = None
+#     in_example = False
+
+#     for tag in xml_siblings:
+#         j = 0
+#         if tag.name == "heading":
+#             text_lower = tag.text.strip().lower()
+#             if is_example_heading(tag.text):
+#                 in_example = True
+#                 current_example = {
+#                     "number": tag.text.strip(),
+#                     "title": xml_siblings[xml_siblings.index(tag) + 1].text.strip(),
+#                     "content": [],
+#                 }
+#                 examples.append(current_example)
+#             elif text_lower == "exampels":  # Handle specific typo case
+#                 in_example = False
+#         elif in_example and current_example is not None:
+#             current_example["content"].append(tag.text.strip())
+#             j += 1
+#         if j > 3:
+#             continue
+
+#     return examples
+
+
 # def extract_examples_start_w_word_all(xml_siblings):
 #     examples = []
 #     current_example = None

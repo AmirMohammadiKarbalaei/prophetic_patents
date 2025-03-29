@@ -35,7 +35,8 @@ class PatentProcessor:
             has_sequences = await loop.run_in_executor(
                 self.thread_pool,
                 lambda: bool(re.findall(r"<s\d+>.*?</s\d+>", xml))
-                or '<sequence-cwu id="SEQLST-0">' in xml or "<!DOCTYPE sequence-cwu" in xml,
+                or '<sequence-cwu id="SEQLST-0">' in xml
+                or "<!DOCTYPE sequence-cwu" in xml,
             )
             if has_sequences:
                 return None
