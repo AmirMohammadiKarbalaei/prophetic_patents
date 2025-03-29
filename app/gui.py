@@ -801,14 +801,28 @@ class PatentDownloaderGUI:
             "<Double-1>", lambda event: self.view_full_data(event, tree, table_name)
         )
 
-        # Style configuration
+        # Enhanced style configuration
         style = ttk.Style()
-        style.configure("Treeview", rowheight=25)
-        style.configure("Treeview.Heading", font=("Helvetica", 10, "bold"))
-        style.map("Treeview", background=[("selected", "#0078D7")])
-
-        # Create font for measurements
-        default_font = tk.font.nametofont("TkDefaultFont")
+        style.configure(
+            "Treeview",
+            rowheight=30,  # Increased row height
+            font=("Helvetica", 10),  # Default font for content
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            padding=5,
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=("Helvetica", 10, "bold"),  # Bold headers
+            relief="raised",
+            padding=5,
+            background="#E8E8E8",  # Light gray background for headers
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#0078D7")],
+            foreground=[("selected", "#FFFFFF")],
+        )
 
         # Connect to database and fetch data
         with sqlite3.connect("./db/patents.db") as conn:
@@ -820,35 +834,58 @@ class PatentDownloaderGUI:
             tree["columns"] = columns
             tree["show"] = "headings"  # Hide the first empty column
 
-            # Configure columns
+            # Configure columns with better spacing and alignment
             for col in columns:
                 tree.heading(
                     col,
                     text=col.replace("_", " ").title(),
+                    anchor="center",  # Center-align headers
                     command=lambda c=col: self.sort_treeview(tree, c, False),
                 )
-                tree.column(col, width=0)  # Start with 0 width to calculate later
+
+                # Set initial column width and alignment based on content type
+                if col in ["id", "year"]:
+                    tree.column(col, width=80, anchor="center")
+                elif "percentage" in col.lower():
+                    tree.column(col, width=120, anchor="center")
+                elif col in ["patent_number"]:
+                    tree.column(col, width=150, anchor="w")  # Left-align
+                elif col in ["example_content", "tense_breakdown"]:
+                    tree.column(
+                        col, width=400, anchor="w"
+                    )  # Left-align, wider for text
+                else:
+                    tree.column(
+                        col, width=200, anchor="w"
+                    )  # Default width and left-align
+
                 self.add_heading_tooltip(tree, col, col.replace("_", " ").title())
 
-            # Fetch and insert data
+            # Fetch and insert data with user-defined page size
             try:
-                rows_to_display = max(1, min(1000, int(self.rows_to_display.get())))
+                rows_to_display = max(1, int(self.rows_to_display.get()))
             except ValueError:
-                rows_to_display = 10
+                rows_to_display = 10  # Default if invalid input
 
             # Get total row count for pagination
             cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
             total_rows = cursor.fetchone()[0]
 
-            # Initialize pagination state for this table
+            # Initialize/update pagination state for this table
             if table_name not in self.pagination_states:
                 self.pagination_states[table_name] = {
                     "current_page": 0,
-                    "page_size": rows_to_display,
                     "total_pages": max(
                         1, (total_rows + rows_to_display - 1) // rows_to_display
                     ),
+                    "page_size": rows_to_display,  # Store the page size
                 }
+            else:
+                # Update existing pagination state with new page size
+                self.pagination_states[table_name]["page_size"] = rows_to_display
+                self.pagination_states[table_name]["total_pages"] = max(
+                    1, (total_rows + rows_to_display - 1) // rows_to_display
+                )
 
             # Create pagination frame
             pagination_frame = ttk.Frame(parent_frame)
@@ -893,29 +930,9 @@ class PatentDownloaderGUI:
                 ),
             ).pack(side=tk.LEFT, padx=5)
 
-            # Add search feature
-            search_frame = ttk.Frame(parent_frame)
-            search_frame.pack(fill=tk.X, padx=5, pady=5)
-            ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
-            self.search_var = tk.StringVar()
-            search_entry = ttk.Entry(
-                search_frame, textvariable=self.search_var, width=30
-            )
-            search_entry.pack(side=tk.LEFT, padx=5)
+            # Add export button to pagination frame
             ttk.Button(
-                search_frame,
-                text="Search",
-                command=lambda: self.search_table(table_name, tree, columns),
-            ).pack(side=tk.LEFT, padx=5)
-            ttk.Button(
-                search_frame,
-                text="Clear",
-                command=lambda: self.clear_search(table_name, tree),
-            ).pack(side=tk.LEFT, padx=5)
-
-            # Add export button
-            ttk.Button(
-                search_frame,
+                pagination_frame,
                 text="Export to CSV",
                 command=lambda: self.export_to_csv(table_name),
             ).pack(side=tk.RIGHT, padx=5)
@@ -924,24 +941,8 @@ class PatentDownloaderGUI:
             self.load_table_data(table_name, tree, 0, rows_to_display)
 
             # Configure row colors
-            tree.tag_configure("oddrow", background="#F0F0F8")
-            tree.tag_configure("evenrow", background="#FFFFFF")
-
-            # Auto-adjust column widths based on content
-            for col in columns:
-                max_width = (
-                    max(
-                        default_font.measure(str(tree.set(item, col)))
-                        for item in tree.get_children()
-                    )
-                    + 20
-                )  # Add padding
-                header_width = default_font.measure(tree.heading(col)["text"]) + 20
-                tree.column(col, width=min(300, max(100, max_width, header_width)))
-
-        # Add tooltips for column headers
-        for col in columns:
-            self.create_header_tooltip(tree, col, col.replace("_", " ").title())
+            tree.tag_configure("oddrow", background="#F5F5F5")  # Lighter gray
+            tree.tag_configure("evenrow", background="#FFFFFF")  # White
 
     def view_full_data(self, event, tree, table_name):
         """Display full data for the selected row in a new window."""
@@ -1187,11 +1188,20 @@ class PatentDownloaderGUI:
         except:
             pass  # Ignore any errors during tooltip destruction
 
-    def load_table_data(self, table_name, tree, page, page_size):
+    def load_table_data(self, table_name, tree, page, page_size=None):
         """Load a specific page of data into the treeview."""
         # Clear existing rows
         for item in tree.get_children():
             tree.delete(item)
+
+        # Use the current page size from pagination state if not specified
+        if page_size is None and table_name in self.pagination_states:
+            page_size = self.pagination_states[table_name]["page_size"]
+        elif page_size is None:
+            try:
+                page_size = max(1, int(self.rows_to_display.get()))
+            except ValueError:
+                page_size = 10
 
         offset = page * page_size
 
@@ -1204,10 +1214,23 @@ class PatentDownloaderGUI:
                 )
                 rows = cursor.fetchall()
 
-                # Insert rows with alternating colors
+                # Format and insert rows with improved visual clarity
                 for i, row in enumerate(rows):
+                    # Format values based on column type
+                    formatted_row = []
+                    for val in row:
+                        if isinstance(val, (int, float)):
+                            if isinstance(val, float):
+                                formatted_row.append(f"{val:.2f}")  # Format floats
+                            else:
+                                formatted_row.append(str(val))  # Format integers
+                        elif val is None:
+                            formatted_row.append("")  # Empty string for NULL values
+                        else:
+                            formatted_row.append(str(val))  # String values as-is
+
                     tag = "evenrow" if i % 2 == 0 else "oddrow"
-                    tree.insert("", tk.END, values=row, tags=(tag,))
+                    tree.insert("", tk.END, values=formatted_row, tags=(tag,))
 
             # Update page label and state
             if table_name in self.pagination_states:
@@ -1232,43 +1255,6 @@ class PatentDownloaderGUI:
             state = self.pagination_states[table_name]
             if 0 <= page < state["total_pages"]:
                 self.load_table_data(table_name, tree, page, state["page_size"])
-
-    def search_table(self, table_name, tree, columns):
-        """Search for data in the table."""
-        search_term = self.search_var.get().strip()
-        if not search_term:
-            self.clear_search(table_name, tree)
-            return
-
-        # Clear existing rows
-        for item in tree.get_children():
-            tree.delete(item)
-
-        # Construct WHERE clause for each column
-        where_clauses = [f"{col} LIKE ?" for col in columns]
-        search_params = [f"%{search_term}%" for _ in columns]
-
-        # Connect to database and fetch matching data
-        with sqlite3.connect("./db/patents.db") as conn:
-            cursor = conn.cursor()
-            query = f"SELECT * FROM {table_name} WHERE {' OR '.join(where_clauses)} LIMIT 1000"
-            cursor.execute(query, search_params)
-            rows = cursor.fetchall()
-
-            # Insert rows with alternating colors
-            for i, row in enumerate(rows):
-                tag = "evenrow" if i % 2 == 0 else "oddrow"
-                tree.insert("", tk.END, values=row, tags=(tag,))
-
-        # Update status
-        if hasattr(self, "page_label"):
-            self.page_label.config(text=f"Search results: {len(rows)} items")
-
-    def clear_search(self, table_name, tree):
-        """Clear search and return to normal pagination."""
-        if hasattr(self, "search_var"):
-            self.search_var.set("")
-        self.load_table_data(table_name, tree, 0, self.page_size)
 
     def export_to_csv(self, table_name):
         """Export table data to CSV file."""

@@ -2,6 +2,8 @@ import sqlite3
 import time
 import os
 import logging
+import random
+from contextlib import contextmanager
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -9,57 +11,107 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseConnection:
-    """Context manager for database connections with retry logic"""
-
-    def __init__(self, db_path, retries=3, retry_delay=1):
+    def __init__(self, db_path, max_retries=5, initial_delay=1, max_delay=30):
         self.db_path = db_path
-        self.retries = retries
-        self.retry_delay = retry_delay
+        self.max_retries = max_retries
+        self.initial_delay = initial_delay
+        self.max_delay = max_delay
         self.conn = None
 
     def __enter__(self):
-        for attempt in range(self.retries):
+        retry_count = 0
+        last_error = None
+        delay = self.initial_delay
+
+        while retry_count < self.max_retries:
             try:
+                # Add random jitter to avoid multiple processes retrying at exact same time
+                jitter = random.uniform(0, 0.1 * delay)
                 self.conn = sqlite3.connect(self.db_path, timeout=20)
                 cursor = self.conn.cursor()
-                cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA busy_timeout=10000")
-                cursor.execute("BEGIN IMMEDIATE")
+
+                # Database optimization settings
+                cursor.execute(
+                    "PRAGMA journal_mode=WAL"
+                )  # Write-Ahead Logging for better concurrency
+                cursor.execute(
+                    "PRAGMA synchronous=NORMAL"
+                )  # Better performance with slight durability trade-off
+                cursor.execute(
+                    "PRAGMA busy_timeout=30000"
+                )  # Wait up to 30 seconds when database is locked
+                cursor.execute(
+                    "PRAGMA temp_store=MEMORY"
+                )  # Store temp tables in memory
+                cursor.execute("BEGIN IMMEDIATE")  # Get write lock immediately
+
                 return self.conn
+
             except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < self.retries - 1:
-                    time.sleep(self.retry_delay)
-                    continue
+                last_error = e
+                if "database is locked" in str(e):
+                    retry_count += 1
+                    if retry_count < self.max_retries:
+                        time.sleep(delay + jitter)
+                        # Exponential backoff with max delay
+                        delay = min(delay * 2, self.max_delay)
+                        continue
                 raise
             except Exception as e:
                 if self.conn:
                     self.conn.rollback()
                 raise
-        return self.conn
+
+        raise sqlite3.OperationalError(
+            f"Failed after {self.max_retries} retries. Last error: {last_error}"
+        )
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
-            if exc_type is None:
-                self.conn.commit()
-            else:
-                self.conn.rollback()
-            self.conn.close()
+            try:
+                if exc_type is None:
+                    self.conn.commit()
+                else:
+                    self.conn.rollback()
+            finally:
+                self.conn.close()
+
+
+@contextmanager
+def database_operation_with_retry(db_path, operation_name, max_retries=5):
+    """Context manager for database operations with retry logic."""
+    retry_count = 0
+    delay = 1
+
+    while True:
+        try:
+            with DatabaseConnection(db_path) as conn:
+                yield conn
+                break  # Success - exit the retry loop
+        except sqlite3.OperationalError as e:
+            retry_count += 1
+            if retry_count >= max_retries or "database is locked" not in str(e):
+                logger.error(
+                    f"Failed {operation_name} after {retry_count} retries: {e}"
+                )
+                raise
+
+            jitter = random.uniform(0, 0.1 * delay)
+            wait_time = delay + jitter
+            logger.warning(
+                f"{operation_name} failed (attempt {retry_count}), retrying in {wait_time:.1f}s..."
+            )
+            time.sleep(wait_time)
+            delay = min(delay * 2, 30)  # Exponential backoff up to 30 seconds
 
 
 def store_patent_examples(examples, db_path="db/patents.db"):
-    conn = None
-    retries = 3
-    retry_delay = 1  # seconds
-
-    for attempt in range(retries):
-        try:
-            conn = sqlite3.connect(db_path, timeout=20)  # Increase timeout
+    """Store patent examples with improved error handling and retry logic."""
+    try:
+        with database_operation_with_retry(db_path, "store_patent_examples") as conn:
             cursor = conn.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")  # Use WAL mode
-            cursor.execute("PRAGMA busy_timeout=10000")  # Set busy timeout
-            cursor.execute("BEGIN IMMEDIATE")  # Get immediate lock
 
-            # Update table schema with new columns
+            # Create table if not exists
             cursor.execute("""CREATE TABLE IF NOT EXISTS patent_examples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 patent_number TEXT NOT NULL,
@@ -69,57 +121,43 @@ def store_patent_examples(examples, db_path="db/patents.db"):
                 tense_breakdown TEXT
             );""")
 
-            for patent_number, examples in examples.items():
-                cursor.execute(
-                    "SELECT patent_number FROM patent_examples WHERE patent_number = ?",
-                    (patent_number,),
-                )
-                if cursor.fetchone() is None:
-                    for idx, example in enumerate(examples, 1):
-                        if len(example["content"]) > 0:
-                            content_list = example["content"].copy()
-                            content_list.insert(0, example["title"] + ".")
-                            full_content = "".join(list(set(content_list)))
+            # Use a transaction for batch inserts
+            for patent_number, examples_list in examples.items():
+                try:
+                    cursor.execute(
+                        "SELECT patent_number FROM patent_examples WHERE patent_number = ?",
+                        (patent_number,),
+                    )
+                    if cursor.fetchone() is None:
+                        for example in examples_list:
+                            if len(example["content"]) > 0:
+                                content_list = example["content"].copy()
+                                content_list.insert(0, example["title"] + ".")
+                                full_content = "".join(list(set(content_list)))
 
-                            # Get additional tense info if available
-                            why_unknown = example.get("why_unknown", "")
-                            tense_breakdown = example.get("tense_breakdown", "")
+                                cursor.execute(
+                                    """INSERT OR REPLACE INTO patent_examples 
+                                    (patent_number, example_name, example_content, why_unknown, tense_breakdown) 
+                                    VALUES (?, ?, ?, ?, ?)""",
+                                    (
+                                        patent_number,
+                                        example["number"],
+                                        full_content.replace("\n\n", ""),
+                                        example.get("why_unknown", ""),
+                                        example.get("tense_breakdown", ""),
+                                    ),
+                                )
+                except Exception as e:
+                    logger.error(f"Error processing patent {patent_number}: {str(e)}")
+                    continue
 
-                            cursor.execute(
-                                """
-                                INSERT OR REPLACE INTO patent_examples 
-                                (patent_number, example_name, example_content, why_unknown, tense_breakdown) 
-                                VALUES (?, ?, ?, ?, ?)
-                            """,
-                                (
-                                    patent_number,
-                                    example["number"],
-                                    full_content.replace("\n\n", ""),
-                                    why_unknown,
-                                    tense_breakdown,
-                                ),
-                            )
-
-            conn.commit()
-            break  # Success - exit retry loop
-
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e) and attempt < retries - 1:
-                if conn:
-                    conn.close()
-                time.sleep(retry_delay)
-                continue
-            raise
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            raise
-        finally:
-            if conn:
-                conn.close()
+    except Exception as e:
+        logger.error(f"Error storing patent examples: {str(e)}")
+        raise
 
 
 def store_patent_statistics(stats, db_path="db/patents.db", year=None):
+    """Store patent statistics with improved error handling and retry logic."""
     try:
         logger.info(f"Storing statistics for {len(stats)} patents")
         if year:
@@ -129,17 +167,10 @@ def store_patent_statistics(stats, db_path="db/patents.db", year=None):
         if not os.path.exists(os.path.dirname(db_path)):
             os.makedirs(os.path.dirname(db_path))
 
-        with DatabaseConnection(db_path) as conn:
+        with database_operation_with_retry(db_path, "store_patent_statistics") as conn:
             cursor = conn.cursor()
 
-            # Check if table exists
-            cursor.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='patent_statistics'"
-            )
-            table_exists = cursor.fetchone()[0] > 0
-            logger.info(f"Patent statistics table exists: {table_exists}")
-
-            # Add year column and mixed_tense_percentage to the schema
+            # Modified schema with new binary columns
             cursor.execute("""CREATE TABLE IF NOT EXISTS patent_statistics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 patent_number TEXT NOT NULL UNIQUE,
@@ -147,7 +178,10 @@ def store_patent_statistics(stats, db_path="db/patents.db", year=None):
                 prophetic INTEGER,
                 nonprophetic INTEGER,
                 unknown INTEGER,
-                mixed_tense_percentage REAL
+                mixed_tense_percentage REAL,
+                all_prophetic INTEGER DEFAULT 0,
+                some_prophetic INTEGER DEFAULT 0,
+                no_prophetic INTEGER DEFAULT 0
             );""")
 
             # Count rows before insertion
@@ -158,13 +192,31 @@ def store_patent_statistics(stats, db_path="db/patents.db", year=None):
             inserted_count = 0
             for patent_number, stat in stats.items():
                 if "past" in stat and "present" in stat and "unknown" in stat:
-                    # Get mixed tense percentage if available
+                    # Calculate prophetic indicators
+                    total_examples = stat["past"] + stat["present"] + stat["unknown"]
+                    all_prophetic = (
+                        1
+                        if total_examples > 0 and stat["present"] == total_examples
+                        else 0
+                    )
+                    no_prophetic = (
+                        1 if total_examples > 0 and stat["present"] == 0 else 0
+                    )
+                    some_prophetic = (
+                        1
+                        if total_examples > 0
+                        and stat["present"] > 0
+                        and not all_prophetic
+                        else 0
+                    )
+
                     mixed_tense_pct = stat.get("mixed_tense_percentage", 0.0)
 
                     cursor.execute(
                         """INSERT OR REPLACE INTO patent_statistics 
-                        (patent_number, year, prophetic, nonprophetic, unknown, mixed_tense_percentage) 
-                        VALUES (?, ?, ?, ?, ?, ?)""",
+                        (patent_number, year, prophetic, nonprophetic, unknown, 
+                        mixed_tense_percentage, all_prophetic, some_prophetic, no_prophetic) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             patent_number,
                             year,
@@ -172,6 +224,9 @@ def store_patent_statistics(stats, db_path="db/patents.db", year=None):
                             stat["past"],
                             stat["unknown"],
                             mixed_tense_pct,
+                            all_prophetic,
+                            some_prophetic,
+                            no_prophetic,
                         ),
                     )
                     inserted_count += 1
