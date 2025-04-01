@@ -7,19 +7,12 @@ import re
 from .nlp_processing import dic_to_dic_w_tense_test
 from .database_utils import store_patent_examples, store_patent_statistics
 from .utils_clean import (
-    remove_leadiong_zeros,
-    find_doc_number,
-    extract_experiments_w_heading,
-    extract_examples_start_w_word,
     remove_duplicate_docs,
 )
 import argparse
-from bs4 import BeautifulSoup
 import time
 import asyncio
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-import multiprocessing
-from functools import partial
 import aiofiles
 from .patent_processor import PatentProcessor
 
@@ -293,8 +286,8 @@ async def process_file_async(file_info, folder_path, callback=None):
 
         current_file_patents = len(xml_no_dup)
 
-        if callback:
-            callback(f"Found {current_file_patents} valid patents in {file}")
+        # if callback:
+        #     callback(f"Found {current_file_patents} valid patents in {file}")
 
         # Clean up thread pool
         thread_pool.shutdown()
