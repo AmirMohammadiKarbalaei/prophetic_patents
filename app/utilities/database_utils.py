@@ -111,7 +111,6 @@ def store_patent_examples(examples, db_path="db/patents.db"):
         with database_operation_with_retry(db_path, "store_patent_examples") as conn:
             cursor = conn.cursor()
 
-            # Create table if not exists
             cursor.execute("""CREATE TABLE IF NOT EXISTS patent_examples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 patent_number TEXT NOT NULL,
@@ -121,32 +120,41 @@ def store_patent_examples(examples, db_path="db/patents.db"):
                 tense_breakdown TEXT
             );""")
 
-            # Use a transaction for batch inserts
             for patent_number, examples_list in examples.items():
                 try:
                     cursor.execute(
                         "SELECT patent_number FROM patent_examples WHERE patent_number = ?",
                         (patent_number,),
                     )
-                    if cursor.fetchone() is None:
+                    if cursor.fetchone() is None and isinstance(examples_list, list):
                         for example in examples_list:
-                            if len(example["content"]) > 0:
-                                content_list = example["content"].copy()
-                                content_list.insert(0, example["title"] + ".")
-                                full_content = "".join(list(set(content_list)))
+                            if not isinstance(example, dict):
+                                continue
 
-                                cursor.execute(
-                                    """INSERT OR REPLACE INTO patent_examples 
-                                    (patent_number, example_name, example_content, why_unknown, tense_breakdown) 
-                                    VALUES (?, ?, ?, ?, ?)""",
-                                    (
-                                        patent_number,
-                                        example["number"],
-                                        full_content.replace("\n\n", ""),
-                                        example.get("why_unknown", ""),
-                                        example.get("tense_breakdown", ""),
-                                    ),
-                                )
+                            content = example.get("content", [])
+                            title = example.get("title", "")
+
+                            if not isinstance(content, list):
+                                content = [str(content)]
+
+                            content_list = content.copy()
+                            if title:
+                                content_list.insert(0, str(title) + ".")
+
+                            full_content = "".join(str(item) for item in content_list)
+
+                            cursor.execute(
+                                """INSERT OR REPLACE INTO patent_examples 
+                                (patent_number, example_name, example_content, why_unknown, tense_breakdown) 
+                                VALUES (?, ?, ?, ?, ?)""",
+                                (
+                                    patent_number,
+                                    example.get("number", ""),
+                                    full_content.replace("\n\n", ""),
+                                    example.get("why_unknown", ""),
+                                    example.get("tense_breakdown", ""),
+                                ),
+                            )
                 except Exception as e:
                     logger.error(f"Error processing patent {patent_number}: {str(e)}")
                     continue

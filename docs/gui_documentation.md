@@ -1,11 +1,12 @@
 # USPTO Patent Analyser GUI Documentation
 
 ## Overview
-The USPTO Patent Analyser is a graphical application that helps users download, process, and analyse patent data from the USPTO database. The application provides functionality for:
-- Downloading patent files
+The USPTO Patent Analyser is a graphical application that helps users download, process, and classify patent data from the USPTO database. The application provides functionality for:
+- Downloading yearly patent zip files
 - Unzipping downloaded files
-- Processing patent data
-- Viewing and analysing patent statistics
+- Processing patents and identifying examples
+- Classifying examples based on tense
+- Viewing database tables (Patent examples and Patent statistics)
 - Exporting data to CSV format
 
 ## Main Functions

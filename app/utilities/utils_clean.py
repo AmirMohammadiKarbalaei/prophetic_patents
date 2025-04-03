@@ -596,7 +596,6 @@ def extract_experiments_w_heading(text):
 #     return examples
 
 
-
 def extract_examples_start_w_word_all(xml_siblings):
     examples = []
     current_example = None
@@ -613,7 +612,12 @@ def extract_examples_start_w_word_all(xml_siblings):
                 or "experiment" in tag.text.strip().lower()
                 or "example" in tag.text.strip().lower()
                 or "trial" in tag.text.strip().lower()
-            ) and not any(tag.text.strip().lower().startswith("examples") or tag.text.strip().lower().startswith("experiments") or tag.text.strip().lower().startswith("tests") for tag in xml_siblings):
+            ) and not any(
+                tag.text.strip().lower().startswith("examples")
+                or tag.text.strip().lower().startswith("experiments")
+                or tag.text.strip().lower().startswith("tests")
+                for tag in xml_siblings
+            ):
                 in_example = True
                 current_example = {
                     "number": tag.text.strip(),
@@ -633,7 +637,13 @@ def extract_examples_start_w_word_all(xml_siblings):
                 or "experiment" in tag.text.strip().lower()
                 or "example" in tag.text.strip().lower()
                 or "trial" in tag.text.strip().lower()
-            ) and not any(tag.text.strip().lower().startswith("examples") or tag.text.strip().lower().startswith("experiments") or tag.text.strip().lower().startswith("tests") for tag in xml_siblings)
+            )
+            and not any(
+                tag.text.strip().lower().startswith("examples")
+                or tag.text.strip().lower().startswith("experiments")
+                or tag.text.strip().lower().startswith("tests")
+                for tag in xml_siblings
+            )
         ):
             in_example = False
         # else:

@@ -19,9 +19,13 @@ class PatentProcessor:
         self.thread_pool = ThreadPoolExecutor(max_workers=max_workers)
         self.process_pool = ProcessPoolExecutor(max_workers=max_workers)
 
-    async def process_patent(self, xml, callback=None):
+    async def process_patent(self, xml, callback=None, stop_event=None):
         """Process a single patent document asynchronously."""
         try:
+            # Check stop event
+            if stop_event and stop_event.is_set():
+                return None
+
             if len(xml) <= 2000:
                 return None
 
@@ -29,6 +33,10 @@ class PatentProcessor:
 
             # Fast pre-check for examples section
             if all(i not in xml.upper() for i in ["EXAMPLES", "EXPERIMENTS", "TESTS"]):
+                return None
+
+            # Check stop event before heavy processing
+            if stop_event and stop_event.is_set():
                 return None
 
             # Check for sequence listings
@@ -41,13 +49,14 @@ class PatentProcessor:
             if has_sequences:
                 return None
 
+            # Check stop event before processing heading
+            if stop_event and stop_event.is_set():
+                return None
+
             # Process heading and examples asynchronously
             heading = await loop.run_in_executor(
                 self.thread_pool, extract_experiments_w_heading, xml
             )
-
-            # if not heading:
-            #     return None
 
             examples = []
             if heading and len(heading) == 1:
@@ -69,6 +78,10 @@ class PatentProcessor:
                     self.thread_pool, extract_examples_start_w_word_all, siblings
                 )
 
+            # Check stop event before finalizing
+            if stop_event and stop_event.is_set():
+                return None
+
             if examples:
                 doc_nums = await loop.run_in_executor(
                     self.thread_pool, find_doc_number, xml
@@ -84,11 +97,9 @@ class PatentProcessor:
                 callback(f"Error processing patent: {str(e)}")
             return None
 
-    async def process_batch(self, patents, callback=None):
+    async def process_batch(self, patents, callback=None, stop_event=None):
         """Process a batch of patents using multiple CPU cores."""
-        batch_size = min(
-            200, len(patents)
-        )  # Adjust batch size based on available memory
+        batch_size = min(200, len(patents))
         total_results = {}
         total_patents = len(patents)
         processed = 0
@@ -99,12 +110,20 @@ class PatentProcessor:
 
         # Process patents in parallel batches
         for i in range(0, len(patents), batch_size):
+            # Check stop event at start of each batch
+            if stop_event and stop_event.is_set():
+                if callback:
+                    callback("Operation stopped by user")
+                break
+
             batch = patents[i : i + batch_size]
             tasks = []
 
             # Create concurrent tasks for the batch
             for patent in batch:
-                task = asyncio.create_task(self.process_patent(patent, callback))
+                task = asyncio.create_task(
+                    self.process_patent(patent, callback, stop_event)
+                )
                 tasks.append(task)
 
             # Process batch results
@@ -122,6 +141,12 @@ class PatentProcessor:
                     callback(
                         f"Processed {processed}/{total_patents} patents - Found {found} with examples"
                     )
+
+            # Check stop event after batch processing
+            if stop_event and stop_event.is_set():
+                if callback:
+                    callback("Operation stopped by user")
+                break
 
             await asyncio.sleep(0)  # Allow other tasks to run
 
