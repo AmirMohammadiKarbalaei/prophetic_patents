@@ -4,18 +4,35 @@ import zipfile
 from lxml import etree
 from tqdm import tqdm
 import re
-from utilities.nlp_processing import dic_to_dic_w_tense_test
-from utilities.database_utils import store_patent_examples, store_patent_statistics
-from utilities.utils_clean import (
-    remove_leadiong_zeros,
-    find_doc_number,
-    extract_experiments_w_heading,
-    extract_examples_start_w_word,
+from .nlp_processing import dic_to_dic_w_tense_test
+from .database_utils import store_patent_examples, store_patent_statistics
+from .utils_clean import (
     remove_duplicate_docs,
 )
 import argparse
-from bs4 import BeautifulSoup
 import time
+import asyncio
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import aiofiles
+from .patent_processor import PatentProcessor
+import multiprocessing  # Add this import
+
+
+# Add PoolManager class
+class PoolManager:
+    _pool = None
+
+    @classmethod
+    def get_pool(cls, max_workers=None):
+        if cls._pool is None:
+            cls._pool = ProcessPoolExecutor(max_workers=max_workers)
+        return cls._pool
+
+    @classmethod
+    def shutdown(cls):
+        if cls._pool:
+            cls._pool.shutdown()
+            cls._pool = None
 
 
 # Custom tqdm class that reports progress to a callback function
@@ -217,142 +234,327 @@ def unzip_files(download_path, unzip_path, callback=None, stop_event=None):
         return False
 
 
-def extract_and_save_examples_in_db(folder_path, callback=None, stop_event=None):
-    """Extract and save examples with progress updates."""
+def process_xml_chunk(chunk):
+    """Process a chunk of XML in a separate process."""
+    try:
+        root = etree.fromstring(chunk.encode(), etree.XMLParser(recover=True))
+        if root is not None:
+            return chunk
+    except Exception:
+        pass
+    return None
+
+
+async def process_xml_in_executor(executor, chunk):
+    """Run XML processing in process pool."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, process_xml_chunk, chunk)
+
+
+async def process_file_async(file_info, folder_path, callback=None, stop_event=None):
+    """Process a single XML file asynchronously."""
+    i, file = file_info
+    file_path = os.path.join(folder_path, file)
+    loop = asyncio.get_running_loop()
+
+    # Check stop event
+    if stop_event and stop_event.is_set():
+        if callback:
+            callback("Operation stopped by user")
+        return file, 0, []
+
     if callback:
-        callback("Starting example extraction process...")
+        callback(f"Processing file {i + 1}: {file}")
 
-    total_num_of_patents = 0
-    total_examples_extracted = 0
+    try:
+        # Create process pool for CPU-intensive work
+        process_pool = ProcessPoolExecutor(max_workers=1)
+        thread_pool = ThreadPoolExecutor(max_workers=2)
 
-    file_names = os.listdir(folder_path)
+        # Read file in chunks asynchronously
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            content = await f.read()
 
-    for i, file in enumerate(file_names):
+        # Check stop event after file read
         if stop_event and stop_event.is_set():
             if callback:
-                callback("Processing stopped by user.")
-            return
+                callback("Operation stopped by user")
+            return file, 0, []
 
-        doc_w_exp = {}  # Reset for each file
-        found_heading = 0
-        not_found_heading = 0
-        all_xml_parts = []
-
-        if file.endswith(".xml"):
+        if '<?xml version="1.0" encoding="UTF-8"?>' not in content:
             if callback:
-                callback(f"Processing file {i + 1} of {len(file_names)}: {file}")
-            file_path = os.path.join(folder_path, file)
-            try:
-                with open(file_path, "r", encoding="utf-8") as file:
-                    content = file.read()
-                    parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
-                    parts = [p for p in parts if p.strip()]
-                    all_xml_parts.extend(parts)
-            except Exception as e:
-                if callback:
-                    callback(f"Error processing {file}: {str(e)}")
-                continue
+                callback(f"Warning: Invalid XML structure in {file}")
+            return file, 0, []
 
-            xml_no_dup = remove_duplicate_docs(all_xml_parts)
-            current_file_patents = len(xml_no_dup)
-            total_num_of_patents += current_file_patents
+        # Split and process parts concurrently
+        parts = content.split('<?xml version="1.0" encoding="UTF-8"?>')
+        valid_parts = []
+
+        # Process XML chunks in parallel
+        tasks = []
+        for part in parts:
+            if stop_event and stop_event.is_set():
+                break
+            if part.strip():
+                task = process_xml_in_executor(process_pool, part)
+                tasks.append(task)
+
+        if stop_event and stop_event.is_set():
             if callback:
-                callback(
-                    f"Found {current_file_patents} unique patents in current file."
-                )
+                callback("Operation stopped by user")
+            return file, 0, []
 
-            for j, xml in enumerate(xml_no_dup):
-                if stop_event and stop_event.is_set():
-                    if callback:
-                        callback("Processing stopped by user.")
-                    return
+        # Gather results
+        results = await asyncio.gather(*tasks)
+        valid_parts = [r for r in results if r is not None]
 
-                if callback:
-                    if current_file_patents - j < 500:
-                        callback(
-                            f"Processed {current_file_patents}/{current_file_patents} patents in current file..."
-                        )
-                    if j % 500 == 0 and j > 1:  # More frequent progress updates
-                        callback(
-                            f"Processed {j}/{current_file_patents} patents in current file..."
-                        )
+        # Close process pool
+        process_pool.shutdown()
 
-                if len(xml) <= 2000:
-                    pass
+        if not valid_parts:
+            if callback:
+                callback(f"No valid XML parts found in {file}")
+            return file, 0, []
 
-                s_tags = re.findall(r"<s\d+>.*?</s\d+>", xml)
-                if len(s_tags) > 0 or '<sequence-cwu id="SEQLST-0">' in xml:
-                    pass
+        # Remove duplicates asynchronously
+        xml_no_dup = await loop.run_in_executor(
+            thread_pool, remove_duplicate_docs, valid_parts
+        )
 
-                heading = extract_experiments_w_heading(xml)
+        current_file_patents = len(xml_no_dup)
 
-                # Process examples based on heading presence
-                if heading and len(heading) == 1:
-                    found_heading += 1
-                    examples = extract_examples_start_w_word(
-                        heading[0].find_next_siblings()
-                    )
-                    if len(examples) == 0:
-                        soup = BeautifulSoup(xml, "xml")
-                        siblings = soup.find_all(["heading", "p"])
-                        examples = extract_examples_start_w_word(siblings)
-                else:
-                    not_found_heading += 1
-                    soup = BeautifulSoup(xml, "xml")
-                    siblings = soup.find_all(["heading", "p"])
-                    examples = extract_examples_start_w_word(siblings)
+        # Clean up thread pool
+        thread_pool.shutdown()
 
-                if len(examples) > 0:
-                    doc_num = remove_leadiong_zeros(find_doc_number(xml)[0])
-                    doc_w_exp[doc_num] = examples
+        return file, current_file_patents, xml_no_dup
 
-            # Store data after processing each file
-            if doc_w_exp:
-                if callback:
-                    callback(f"Found {len(doc_w_exp)} patents with examples")
-                try:
-                    if callback:
-                        callback("Starting tense classification...")
+    except Exception as e:
+        if callback:
+            callback(f"Error processing {file}: {str(e)}")
+        return file, 0, []
 
-                    with_tense = dic_to_dic_w_tense_test(doc_w_exp)
 
-                    if callback:
-                        callback(
-                            f"Classification complete, found {len(with_tense)} results"
-                        )
-                        # Verify structure of tense data
-                        if with_tense:
-                            sample_key = next(iter(with_tense.keys()))
-                            sample_value = with_tense[sample_key]
-                            callback(
-                                f"Sample tense data: Patent {sample_key} → {sample_value}"
-                            )
+async def process_files_parallel(
+    folder_path, callback=None, max_workers=4, year=None, stop_event=None
+):
+    """Process multiple XML files using concurrent pipelines."""
+    start_time = time.time()
 
-                    # Ensure data has expected structure before storage
-                    if with_tense:
-                        if callback:
-                            callback(
-                                f"Storing {len(with_tense)} patent statistics records..."
-                            )
-                        store_patent_examples(doc_w_exp)
-                        store_patent_statistics(with_tense)
-                        total_examples_extracted += len(doc_w_exp)
-                    else:
-                        if callback:
-                            callback(
-                                "No tense data was generated, skipping database storage"
-                            )
-
-                except Exception as e:
-                    if callback:
-                        callback(f"Error during tense classification: {str(e)}")
-                    import traceback
-
-                    if callback:
-                        callback(traceback.format_exc())
+    # Initialize
+    file_names = [f for f in os.listdir(folder_path) if f.endswith(".xml")]
+    processor = PatentProcessor(max_workers=4)
+    grand_total = 0
 
     if callback:
         callback(
-            f"Processing complete. Total patents processed: {total_num_of_patents}"
+            f"\nStarting parallel processing with {max_workers} concurrent pipelines"
         )
-        callback(f"Total examples extracted and stored: {total_examples_extracted}")
+        callback(f"Found {len(file_names)} files to process")
+
+    # Process files in batches of max_workers
+    for i in range(0, len(file_names), max_workers):
+        # Check stop event at start of each batch
+        if stop_event and stop_event.is_set():
+            if callback:
+                callback("Operation stopped by user")
+            break
+
+        batch = file_names[i : i + max_workers]
+        current_tasks = []
+
+        # Create concurrent pipelines for each file in batch
+        for j, file in enumerate(batch):
+            pipeline = create_processing_pipeline(
+                (i + j, file), folder_path, processor, callback, year, stop_event
+            )
+            current_tasks.append(pipeline)
+
+        # Execute all pipelines concurrently
+        batch_results = await asyncio.gather(*current_tasks)
+
+        # Aggregate results
+        for patents_found in batch_results:
+            if patents_found and patents_found > 0:
+                grand_total += patents_found
+                if callback:
+                    callback(f"Current total patents with examples: {grand_total}")
+
+        # Allow other operations
+        await asyncio.sleep(0)
+
+    # Calculate and display total time
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    hours = int(elapsed_time // 3600)
+    minutes = int((elapsed_time % 3600) // 60)
+    seconds = int(elapsed_time % 60)
+
+    if callback:
+        if stop_event and stop_event.is_set():
+            callback("\nProcessing stopped by user")
+        else:
+            callback(f"\nProcessing complete!")
+        callback(f"Total patents with examples found: {grand_total}")
+        callback(f"Total time taken: {hours}h {minutes}m {seconds}s")
+
+    return grand_total, []
+
+
+async def create_processing_pipeline(
+    file_info, folder_path, processor, callback, year=None, stop_event=None
+):
+    """Create a complete processing pipeline for a single file."""
+    try:
+        # Check stop event at start
+        if stop_event and stop_event.is_set():
+            return 0
+
+        # Stage 1: Extract patents from XML
+        file_result = await process_file_async(
+            file_info, folder_path, callback, stop_event
+        )
+        if not isinstance(file_result, tuple) or not file_result[2]:
+            return 0
+
+        # Check stop event after extraction
+        if stop_event and stop_event.is_set():
+            return 0
+
+        file_name, count, xml_parts = file_result
+        if callback:
+            callback(f"\nProcessing {count} patents from {file_name}")
+
+        # Extract year from filename if not provided
+        file_year = year
+        if not file_year and file_name.startswith("ipg"):
+            year_match = re.match(r"ipg(\d{2})\d{4}\.xml", file_name)
+            if year_match:
+                two_digit_year = int(year_match.group(1))
+                file_year = (
+                    2000 + two_digit_year
+                    if two_digit_year < 50
+                    else 1900 + two_digit_year
+                )
+
+        # Check stop event before processing
+        if stop_event and stop_event.is_set():
+            return 0
+
+        # Stage 2: Process patents
+        doc_w_exp = await processor.process_batch(xml_parts, callback, stop_event)
+        if not doc_w_exp:
+            return 0
+
+        # Check stop event before classification
+        if stop_event and stop_event.is_set():
+            return 0
+
+        # Stage 3: Classify and store results
+        classification_workers = min(len(doc_w_exp), max(2, processor.max_workers * 2))
+        with ThreadPoolExecutor(max_workers=classification_workers) as executor:
+            loop = asyncio.get_running_loop()
+
+            # Classify examples
+            with_tense = await loop.run_in_executor(
+                executor, dic_to_dic_w_tense_test, doc_w_exp
+            )
+
+            # Check stop event before storage
+            if stop_event and stop_event.is_set():
+                return 0
+
+            # Store results
+            with ThreadPoolExecutor(
+                max_workers=processor.max_workers
+            ) as storage_executor:
+                await asyncio.gather(
+                    loop.run_in_executor(
+                        storage_executor, store_patent_examples, doc_w_exp
+                    ),
+                    loop.run_in_executor(
+                        storage_executor,
+                        lambda: store_patent_statistics(with_tense, year=file_year),
+                    ),
+                )
+
+            if callback:
+                callback(
+                    f"Saved {len(doc_w_exp)} patents with examples into db from {file_name}"
+                )
+
+            return len(doc_w_exp)
+
+    except Exception as e:
+        if callback:
+            callback(f"Error in pipeline for {file_info[1]}: {str(e)}")
+        return 0
+
+
+async def process_batch(batch, callback=None):
+    """Process a batch of patents asynchronously."""
+    processor = PatentProcessor(max_workers=2)
+    doc_w_exp = await processor.process_batch(batch, callback)
+    return doc_w_exp
+
+
+def extract_and_save_examples_in_db(
+    folder_path, callback=None, stop_event=None, max_workers=4, year=None
+):
+    """Extract and save examples with progress updates."""
+    if callback:
+        callback("Starting example extraction process...")
+        if year:
+            callback(f"Using year {year} from user input")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        # Handle stop_event being a tuple of events
+        if isinstance(stop_event, tuple):
+            thread_event, mp_event = stop_event
+            stop_event = mp_event  # Use the MP event for processing
+        elif stop_event is None:
+            stop_event = multiprocessing.Event()
+
+        # Check if the event is already set before starting
+        if stop_event.is_set():
+            if callback:
+                callback("Operation stopped by user")
+            return
+
+        total_num_of_patents, _ = loop.run_until_complete(
+            process_files_parallel(
+                folder_path,
+                callback,
+                max_workers,
+                year,
+                stop_event,
+            )
+        )
+
+        if callback:
+            if stop_event.is_set():
+                callback("Processing stopped by user")
+            else:
+                callback(
+                    f"Processing complete. Total patents processed: {total_num_of_patents}"
+                )
+
+    except Exception as e:
+        if callback:
+            callback(f"Error during parallel processing: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+    finally:
+        loop.close()
+
+        # Clean up any remaining process pools
+        from .patent_processor import PatentProcessor
+
+        if hasattr(PatentProcessor, "process_pool"):
+            try:
+                PatentProcessor.process_pool.shutdown(wait=False)
+            except:
+                pass

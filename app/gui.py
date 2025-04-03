@@ -1,9 +1,11 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, font  # Add font here
+from tkinter import ttk, messagebox, filedialog, font
 import os
 import threading
 import queue
-import sqlite3  # Add this import
+import sqlite3
+import multiprocessing
+from multiprocessing import freeze_support, Event as MPEvent
 from utilities.app_utils import (
     download_patents_pto,
     unzip_files,
@@ -12,30 +14,80 @@ from utilities.app_utils import (
     validate_kind,
 )
 
+# Add freeze_support call at module level
+freeze_support()
+
 
 def process_year(year, kind, base_path, status_callback=None, stop_event=None):
     """Process a single year of patent data."""
     try:
-        if stop_event and stop_event.is_set():
+        # Unpack stop events if provided as tuple
+        thread_event = None
+        mp_event = None
+        if isinstance(stop_event, tuple):
+            thread_event, mp_event = stop_event
+        elif isinstance(stop_event, (threading.Event, multiprocessing.Event)):
+            thread_event = stop_event
+
+        # Check stop events
+        if (thread_event and thread_event.is_set()) or (mp_event and mp_event.is_set()):
+            if status_callback:
+                status_callback("Operation stopped by user")
             return False
+
+        # Pass thread event to download
         downloaded, download_path = download_patents_pto(
-            year=year, kind=kind, callback=status_callback, stop_event=stop_event
+            year=year,
+            kind=kind,
+            callback=status_callback,
+            stop_event=thread_event,  # Only pass thread event
         )
-        if stop_event and stop_event.is_set():
+
+        # Check stop events after download
+        if (thread_event and thread_event.is_set()) or (mp_event and mp_event.is_set()):
+            if status_callback:
+                status_callback("Operation stopped by user")
             return False
+
         if downloaded:
             unzip_path = os.path.join(base_path, f"patent_{kind}s_{year}")
-            unzip_files(
+            # Pass thread event to unzip
+            if not unzip_files(
                 download_path,
                 unzip_path,
                 callback=status_callback,
-                stop_event=stop_event,
-            )
-            if stop_event and stop_event.is_set():
+                stop_event=thread_event,  # Only pass thread event
+            ):
                 return False
+
+            # Check stop events after unzip
+            if (thread_event and thread_event.is_set()) or (
+                mp_event and mp_event.is_set()
+            ):
+                if status_callback:
+                    status_callback("Operation stopped by user")
+                return False
+
+            # Set multiprocessing start method
+            if multiprocessing.get_start_method(allow_none=True) != "spawn":
+                multiprocessing.set_start_method("spawn", force=True)
+
+            # Pass both events to processing function
             extract_and_save_examples_in_db(
-                unzip_path, callback=status_callback, stop_event=stop_event
+                unzip_path,
+                callback=status_callback,
+                stop_event=mp_event,  # Pass MP event
+                max_workers=4,
+                year=year,
             )
+
+            if (thread_event and thread_event.is_set()) or (
+                mp_event and mp_event.is_set()
+            ):
+                if status_callback:
+                    status_callback("Operation stopped by user")
+                return False
+
             if status_callback:
                 status_callback(f"Processing complete for year {year}")
             return True
@@ -68,12 +120,12 @@ class PatentDownloaderGUI:
         root.grid_rowconfigure(0, weight=1)
         root.grid_columnconfigure(0, weight=1)
 
-        # Log frame (moved to row 9 to make room for new buttons)
+        # Log frame (moved to row 11 to make room for new buttons)
         log_frame = ttk.LabelFrame(main_frame, text="Log Messages", padding="5")
         log_frame.grid(
-            row=9, column=0, columnspan=2, sticky=(tk.N, tk.S, tk.E, tk.W), pady=5
+            row=11, column=0, columnspan=2, sticky=(tk.N, tk.S, tk.E, tk.W), pady=5
         )
-        main_frame.grid_rowconfigure(9, weight=1)
+        main_frame.grid_rowconfigure(11, weight=1)
         main_frame.grid_columnconfigure(0, weight=1)
 
         self.log_text = tk.Text(
@@ -160,10 +212,10 @@ class PatentDownloaderGUI:
         )
 
         # Progress
-        self.progress_var = tk.StringVar(value="Ready")
-        ttk.Label(main_frame, textvariable=self.progress_var).grid(
-            row=4, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
-        )
+        # self.progress_var = tk.StringVar(value="Ready")
+        # ttk.Label(main_frame, textvariable=self.progress_var).grid(
+        #     row=4, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
+        # )
 
         # Operation Buttons - Download, Unzip, Process separately
         ttk.Button(
@@ -183,30 +235,52 @@ class PatentDownloaderGUI:
             row=7, column=1, columnspan=1, pady=5, sticky=tk.N + tk.S + tk.E + tk.W
         )
 
+        # Add concurrent files control before the log frame
+        concurrency_frame = ttk.Frame(main_frame)
+        concurrency_frame.grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Label(concurrency_frame, text="Concurrent Files:").pack(side=tk.LEFT)
+        self.concurrent_files = tk.StringVar(value="4")  # Default to 4
+        ttk.Entry(concurrency_frame, textvariable=self.concurrent_files, width=5).pack(
+            side=tk.LEFT, padx=5
+        )
+        ttk.Label(concurrency_frame, text="(1-8 recommended)").pack(side=tk.LEFT)
+
         # Full Operation Button (all steps at once)
         ttk.Button(
             main_frame, text="Run Complete Process", command=self.download_patents
-        ).grid(row=8, column=0, columnspan=2, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+        ).grid(row=9, column=0, columnspan=2, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
+        # Add disclaimer text below the Run Complete Process button
+        disclaimer_text = "Note: Processing each year of patent data can take between 3 to 12 hours\ndepending on your hardware. Multiple years will take proportionally longer."
+        disclaimer_label = ttk.Label(
+            main_frame,
+            text=disclaimer_text,
+            foreground="darkred",
+            justify=tk.CENTER,
+            wraplength=600,
+        )
+        disclaimer_label.grid(row=10, column=0, columnspan=2, pady=(0, 10))
 
         # Add a new button to view database tables
         ttk.Button(
             main_frame, text="View Database Tables", command=self.view_database_tables
         ).grid(
-            row=10, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
+            row=12, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
         )
 
         # Add an entry to set the number of rows to display
         ttk.Label(main_frame, text="Rows to Display:").grid(
-            row=11, column=0, sticky=tk.E, pady=5
+            row=13, column=0, sticky=tk.E, pady=5
         )
         self.rows_to_display = tk.StringVar(value="10")
         ttk.Entry(main_frame, textvariable=self.rows_to_display, width=6).grid(
-            row=11, column=1, sticky=tk.W, pady=5
+            row=13, column=1, sticky=tk.W, pady=5
         )
 
         self.log_queue = queue.Queue()
         self.error_occurred = False  # Track if an error has occurred
         self.stop_event = threading.Event()  # Event to signal stopping the download
+        self.mp_stop_event = MPEvent()  # Event for multiprocessing operations
         self.root.after(100, self.process_log_queue)
 
         # Track state of each operation
@@ -254,25 +328,42 @@ class PatentDownloaderGUI:
 
     def stop_operation(self):
         """Stop all running operations."""
-        if self.active_thread and self.active_thread.is_alive():
-            self.update_log("Stopping all operations...")
-            self.stop_event.set()  # Signal all processes to stop
+        if not self.active_thread or not self.active_thread.is_alive():
+            return
 
-            # Wait for a short time for the thread to stop gracefully
-            self.active_thread.join(timeout=2.0)
+        self.update_log("Stopping all operations...")
+        self.stop_event.set()  # Signal thread operations to stop
+        self.mp_stop_event.set()  # Signal multiprocessing operations to stop
 
-            # If thread is still alive after timeout, show a message
+        # Force stop any active multiprocessing pools
+        from utilities.app_utils import PoolManager
+
+        if PoolManager._pool:
+            PoolManager._pool.terminate()
+            PoolManager._pool.join()
+            PoolManager._pool = None
+
+        def check_thread():
             if self.active_thread.is_alive():
-                self.update_log("Operation is taking longer to stop. Please wait...")
-                self.active_thread.join()  # Wait for complete stop
+                # Still running, update GUI and check again in 100ms
+                self.root.update_idletasks()  # Keep GUI responsive
+                self.root.after(100, check_thread)
+            else:
+                # Thread stopped
+                self.update_log("All operations stopped successfully.")
+                self.stop_event.clear()
+                self.mp_stop_event = MPEvent()  # Create new MP event
+                self.active_thread = None
 
-            self.update_log("All operations stopped.")
-            # Reset stop event for future operations
-            self.stop_event.clear()
+        # Start periodic checks
+        check_thread()
+        self.update_log("Initiated stop operation - please wait...")
 
     def validate_inputs(self):
         """Validate user inputs with proper error handling."""
         try:
+            # Remove the disclaimer popup and directly validate inputs
+
             # Validate year inputs
             if self.year_type.get() == "single":
                 year_str = self.single_year_var.get().strip()
@@ -309,6 +400,18 @@ class PatentDownloaderGUI:
             # Validate kind
             kind = self.kind_var.get()
             validate_kind(kind)
+
+            # Validate concurrent files
+            try:
+                concurrent = int(self.concurrent_files.get())
+                if concurrent < 1:
+                    raise ValueError("Concurrent files must be at least 1")
+                if concurrent > 16:  # Set a reasonable upper limit
+                    raise ValueError("Maximum 16 concurrent files allowed")
+            except ValueError as e:
+                if "concurrent files" in str(e):
+                    raise
+                raise ValueError("Invalid concurrent files value")
 
             return True
 
@@ -456,6 +559,7 @@ class PatentDownloaderGUI:
         def run_processing():
             try:
                 self.stop_event.clear()
+                self.mp_stop_event = MPEvent()  # Reset MP event at start
 
                 years_to_process = self._get_years_to_process()
                 if not years_to_process:
@@ -466,7 +570,7 @@ class PatentDownloaderGUI:
                 success_count = 0
 
                 for year in years_to_process:
-                    if self.stop_event.is_set():
+                    if self.stop_event.is_set() or self.mp_stop_event.is_set():
                         break
 
                     # Check if unzip path exists
@@ -478,7 +582,12 @@ class PatentDownloaderGUI:
                             extract_and_save_examples_in_db(
                                 unzip_path,
                                 callback=self.update_log,
-                                stop_event=self.stop_event,  # Add this line
+                                stop_event=(
+                                    self.stop_event,
+                                    self.mp_stop_event,
+                                ),  # Pass both events
+                                max_workers=int(self.concurrent_files.get()),
+                                year=year,
                             )
                             self.log_queue.put(f"Processing complete for year {year}")
                             success_count += 1
@@ -491,7 +600,7 @@ class PatentDownloaderGUI:
                             f"No unzipped data found for year {year}. Please unzip first."
                         )
 
-                if not self.stop_event.is_set():
+                if not self.stop_event.is_set() and not self.mp_stop_event.is_set():
                     if success_count > 0:
                         self.log_queue.put(
                             f"Processing completed successfully! Processed {success_count} year(s)."
@@ -612,9 +721,12 @@ class PatentDownloaderGUI:
 
         def run_download():
             try:
+                # Reset stop events at start of operation
+                self.stop_event.clear()
+                self.mp_stop_event = MPEvent()
+
                 self.log_queue.put("Clearing previous log")
                 self.log_text.delete(1.0, tk.END)  # Clear previous log
-                self.stop_event.clear()  # Clear the stop event before starting
 
                 years_to_process = self._get_years_to_process()
                 if not years_to_process:
@@ -625,61 +737,28 @@ class PatentDownloaderGUI:
                 success_count = 0
 
                 for year in years_to_process:
-                    if self.stop_event.is_set():
+                    if self.stop_event.is_set() or self.mp_stop_event.is_set():
+                        self.log_queue.put("Operation stopped by user.")
                         break
 
                     self.log_queue.put(f"Processing year {year}")
 
-                    # Download phase
-                    downloaded, download_path = download_patents_pto(
-                        year=year,
-                        kind=kind,
-                        callback=self.update_log,
-                        stop_event=self.stop_event,
-                    )
-
-                    if not downloaded or self.stop_event.is_set():
-                        self.log_queue.put(
-                            f"Failed to download patents for year {year}"
-                        )
-                        continue
-
-                    # Unzip phase
-                    unzip_path = os.path.join(base_path, f"patent_{kind}s_{year}")
-                    try:
-                        unzip_files(
-                            download_path,
-                            unzip_path,
-                            callback=self.update_log,
-                            stop_event=self.stop_event,
-                        )
-                    except Exception as e:
-                        self.log_queue.put(
-                            f"Failed to unzip files for year {year}: {str(e)}"
-                        )
-                        continue
-
-                    if self.stop_event.is_set():
-                        continue
-
-                    # Process and store in database
-                    try:
-                        extract_and_save_examples_in_db(
-                            unzip_path,
-                            callback=self.update_log,
-                            stop_event=self.stop_event,
-                        )
+                    if process_year(
+                        year,
+                        kind,
+                        base_path,
+                        status_callback=self.update_log,
+                        stop_event=(
+                            self.stop_event,
+                            self.mp_stop_event,
+                        ),  # Pass both events
+                    ):
                         success_count += 1
-                        self.log_queue.put(
-                            f"Successfully processed and stored data for year {year}"
-                        )
-                    except Exception as e:
-                        self.log_queue.put(
-                            f"Failed to process data for year {year}: {str(e)}"
-                        )
-                        continue
 
-                if not self.stop_event.is_set():
+                    if self.stop_event.is_set() or self.mp_stop_event.is_set():
+                        break
+
+                if not self.stop_event.is_set() and not self.mp_stop_event.is_set():
                     if success_count > 0:
                         self.log_queue.put(
                             f"Complete process finished successfully! Processed {success_count} year(s)."
@@ -693,6 +772,10 @@ class PatentDownloaderGUI:
 
             except Exception as e:
                 self.log_queue.put(f"ERROR: An error occurred: {str(e)}")
+            finally:
+                if self.stop_event.is_set() or self.mp_stop_event.is_set():
+                    self.stop_event.clear()  # Reset stop event
+                    self.mp_stop_event = MPEvent()  # Reset multiprocessing event
 
         self.active_thread = threading.Thread(target=run_download)
         self.active_thread.start()
@@ -775,14 +858,28 @@ class PatentDownloaderGUI:
             "<Double-1>", lambda event: self.view_full_data(event, tree, table_name)
         )
 
-        # Style configuration
+        # Enhanced style configuration
         style = ttk.Style()
-        style.configure("Treeview", rowheight=25)
-        style.configure("Treeview.Heading", font=("Helvetica", 10, "bold"))
-        style.map("Treeview", background=[("selected", "#0078D7")])
-
-        # Create font for measurements
-        default_font = tk.font.nametofont("TkDefaultFont")
+        style.configure(
+            "Treeview",
+            rowheight=30,  # Increased row height
+            font=("Helvetica", 10),  # Default font for content
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            padding=5,
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=("Helvetica", 10, "bold"),  # Bold headers
+            relief="raised",
+            padding=5,
+            background="#E8E8E8",  # Light gray background for headers
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#0078D7")],
+            foreground=[("selected", "#FFFFFF")],
+        )
 
         # Connect to database and fetch data
         with sqlite3.connect("./db/patents.db") as conn:
@@ -794,35 +891,58 @@ class PatentDownloaderGUI:
             tree["columns"] = columns
             tree["show"] = "headings"  # Hide the first empty column
 
-            # Configure columns
+            # Configure columns with better spacing and alignment based on content type
             for col in columns:
                 tree.heading(
                     col,
                     text=col.replace("_", " ").title(),
+                    anchor="center",  # Center-align headers
                     command=lambda c=col: self.sort_treeview(tree, c, False),
                 )
-                tree.column(col, width=0)  # Start with 0 width to calculate later
+
+                # Set initial column width and alignment based on content type
+                if col in ["id", "year"]:
+                    tree.column(col, width=80, anchor="center")
+                elif "percentage" in col.lower():
+                    tree.column(col, width=120, anchor="center")
+                elif col in ["patent_number"]:
+                    tree.column(col, width=150, anchor="w")  # Left-align
+                elif col in ["example_content", "tense_breakdown"]:
+                    tree.column(
+                        col, width=400, anchor="w"
+                    )  # Left-align, wider for text
+                else:
+                    tree.column(
+                        col, width=200, anchor="w"
+                    )  # Default width and left-align
+
                 self.add_heading_tooltip(tree, col, col.replace("_", " ").title())
 
-            # Fetch and insert data
+            # Fetch and insert data with user-defined page size
             try:
-                rows_to_display = max(1, min(1000, int(self.rows_to_display.get())))
+                rows_to_display = max(1, int(self.rows_to_display.get()))
             except ValueError:
-                rows_to_display = 10
+                rows_to_display = 10  # Default if invalid input
 
             # Get total row count for pagination
             cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
             total_rows = cursor.fetchone()[0]
 
-            # Initialize pagination state for this table
+            # Initialize/update pagination state for this table
             if table_name not in self.pagination_states:
                 self.pagination_states[table_name] = {
                     "current_page": 0,
-                    "page_size": rows_to_display,
                     "total_pages": max(
                         1, (total_rows + rows_to_display - 1) // rows_to_display
                     ),
+                    "page_size": rows_to_display,  # Store the page size
                 }
+            else:
+                # Update existing pagination state with new page size
+                self.pagination_states[table_name]["page_size"] = rows_to_display
+                self.pagination_states[table_name]["total_pages"] = max(
+                    1, (total_rows + rows_to_display - 1) // rows_to_display
+                )
 
             # Create pagination frame
             pagination_frame = ttk.Frame(parent_frame)
@@ -867,29 +987,9 @@ class PatentDownloaderGUI:
                 ),
             ).pack(side=tk.LEFT, padx=5)
 
-            # Add search feature
-            search_frame = ttk.Frame(parent_frame)
-            search_frame.pack(fill=tk.X, padx=5, pady=5)
-            ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
-            self.search_var = tk.StringVar()
-            search_entry = ttk.Entry(
-                search_frame, textvariable=self.search_var, width=30
-            )
-            search_entry.pack(side=tk.LEFT, padx=5)
+            # Add export button to pagination frame
             ttk.Button(
-                search_frame,
-                text="Search",
-                command=lambda: self.search_table(table_name, tree, columns),
-            ).pack(side=tk.LEFT, padx=5)
-            ttk.Button(
-                search_frame,
-                text="Clear",
-                command=lambda: self.clear_search(table_name, tree),
-            ).pack(side=tk.LEFT, padx=5)
-
-            # Add export button
-            ttk.Button(
-                search_frame,
+                pagination_frame,
                 text="Export to CSV",
                 command=lambda: self.export_to_csv(table_name),
             ).pack(side=tk.RIGHT, padx=5)
@@ -898,24 +998,8 @@ class PatentDownloaderGUI:
             self.load_table_data(table_name, tree, 0, rows_to_display)
 
             # Configure row colors
-            tree.tag_configure("oddrow", background="#F0F0F8")
-            tree.tag_configure("evenrow", background="#FFFFFF")
-
-            # Auto-adjust column widths based on content
-            for col in columns:
-                max_width = (
-                    max(
-                        default_font.measure(str(tree.set(item, col)))
-                        for item in tree.get_children()
-                    )
-                    + 20
-                )  # Add padding
-                header_width = default_font.measure(tree.heading(col)["text"]) + 20
-                tree.column(col, width=min(300, max(100, max_width, header_width)))
-
-        # Add tooltips for column headers
-        for col in columns:
-            self.create_header_tooltip(tree, col, col.replace("_", " ").title())
+            tree.tag_configure("oddrow", background="#F5F5F5")  # Lighter gray
+            tree.tag_configure("evenrow", background="#FFFFFF")  # White
 
     def view_full_data(self, event, tree, table_name):
         """Display full data for the selected row in a new window."""
@@ -1161,11 +1245,20 @@ class PatentDownloaderGUI:
         except:
             pass  # Ignore any errors during tooltip destruction
 
-    def load_table_data(self, table_name, tree, page, page_size):
+    def load_table_data(self, table_name, tree, page, page_size=None):
         """Load a specific page of data into the treeview."""
         # Clear existing rows
         for item in tree.get_children():
             tree.delete(item)
+
+        # Use the current page size from pagination state if not specified
+        if page_size is None and table_name in self.pagination_states:
+            page_size = self.pagination_states[table_name]["page_size"]
+        elif page_size is None:
+            try:
+                page_size = max(1, int(self.rows_to_display.get()))
+            except ValueError:
+                page_size = 10
 
         offset = page * page_size
 
@@ -1178,10 +1271,23 @@ class PatentDownloaderGUI:
                 )
                 rows = cursor.fetchall()
 
-                # Insert rows with alternating colors
+                # Format and insert rows with improved visual clarity
                 for i, row in enumerate(rows):
+                    # Format values based on column type
+                    formatted_row = []
+                    for val in row:
+                        if isinstance(val, (int, float)):
+                            if isinstance(val, float):
+                                formatted_row.append(f"{val:.2f}")  # Format floats
+                            else:
+                                formatted_row.append(str(val))  # Format integers
+                        elif val is None:
+                            formatted_row.append("")  # Empty string for NULL values
+                        else:
+                            formatted_row.append(str(val))  # String values as-is
+
                     tag = "evenrow" if i % 2 == 0 else "oddrow"
-                    tree.insert("", tk.END, values=row, tags=(tag,))
+                    tree.insert("", tk.END, values=formatted_row, tags=(tag,))
 
             # Update page label and state
             if table_name in self.pagination_states:
@@ -1206,43 +1312,6 @@ class PatentDownloaderGUI:
             state = self.pagination_states[table_name]
             if 0 <= page < state["total_pages"]:
                 self.load_table_data(table_name, tree, page, state["page_size"])
-
-    def search_table(self, table_name, tree, columns):
-        """Search for data in the table."""
-        search_term = self.search_var.get().strip()
-        if not search_term:
-            self.clear_search(table_name, tree)
-            return
-
-        # Clear existing rows
-        for item in tree.get_children():
-            tree.delete(item)
-
-        # Construct WHERE clause for each column
-        where_clauses = [f"{col} LIKE ?" for col in columns]
-        search_params = [f"%{search_term}%" for _ in columns]
-
-        # Connect to database and fetch matching data
-        with sqlite3.connect("./db/patents.db") as conn:
-            cursor = conn.cursor()
-            query = f"SELECT * FROM {table_name} WHERE {' OR '.join(where_clauses)} LIMIT 1000"
-            cursor.execute(query, search_params)
-            rows = cursor.fetchall()
-
-            # Insert rows with alternating colors
-            for i, row in enumerate(rows):
-                tag = "evenrow" if i % 2 == 0 else "oddrow"
-                tree.insert("", tk.END, values=row, tags=(tag,))
-
-        # Update status
-        if hasattr(self, "page_label"):
-            self.page_label.config(text=f"Search results: {len(rows)} items")
-
-    def clear_search(self, table_name, tree):
-        """Clear search and return to normal pagination."""
-        if hasattr(self, "search_var"):
-            self.search_var.set("")
-        self.load_table_data(table_name, tree, 0, self.page_size)
 
     def export_to_csv(self, table_name):
         """Export table data to CSV file."""
@@ -1334,6 +1403,8 @@ class ToolTip:
 
 
 def main():
+    # Add freeze support here as well
+    multiprocessing.freeze_support()
     root = tk.Tk()
     app = PatentDownloaderGUI(root)
     root.mainloop()
