@@ -18,3 +18,4 @@ app/build
 app/dist
 *.ipynb
 notebooks/*
+*.zip
