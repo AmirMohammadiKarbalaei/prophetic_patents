@@ -116,6 +116,10 @@ def store_patent_examples(examples, db_path="db/patents.db"):
                 patent_number TEXT NOT NULL,
                 example_name TEXT,
                 example_content TEXT NOT NULL,
+                tense TEXT,
+                past_percentage REAL,
+                present_percentage REAL,
+                unknown_percentage REAL,
                 why_unknown TEXT,
                 tense_breakdown TEXT
             );""")
@@ -145,14 +149,21 @@ def store_patent_examples(examples, db_path="db/patents.db"):
 
                             cursor.execute(
                                 """INSERT OR REPLACE INTO patent_examples 
-                                (patent_number, example_name, example_content, why_unknown, tense_breakdown) 
-                                VALUES (?, ?, ?, ?, ?)""",
+                                (patent_number, example_name, example_content, tense, past_percentage,
+                                present_percentage, unknown_percentage, why_unknown, tense_breakdown) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     patent_number,
                                     example.get("number", ""),
                                     full_content.replace("\n\n", ""),
+                                    example.get("tense", ""),
+                                    example.get("past_percentage", 0.0),
+                                    example.get("present_percentage", 0.0),
+                                    example.get("unknown_percentage", 0.0),
                                     example.get("why_unknown", ""),
-                                    example.get("tense_breakdown", ""),
+                                    example.get("tense_breakdown", "")
+                                    if example.get("tense") != "unknown"
+                                    else "",
                                 ),
                             )
                 except Exception as e:

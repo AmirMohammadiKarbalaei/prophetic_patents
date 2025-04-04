@@ -17,3 +17,4 @@ EN_ipc_title_list_20250101
 *.db
 app/build
 app/dist
+*.ipynb
