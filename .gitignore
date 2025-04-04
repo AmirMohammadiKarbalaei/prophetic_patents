@@ -10,7 +10,6 @@ test
 unzipped_patents_2015
 patents_2015
 EN_ipc_title_list_20250101
-*.zip
 *.xml
 *.csv
 *.pkl
