@@ -1,212 +1,293 @@
 import nltk
 from nltk import pos_tag, word_tokenize
 from bs4 import BeautifulSoup
-import re
 from collections import Counter
-
+import re
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 
 nltk.download("averaged_perceptron_tagger")
 nltk.download("punkt")
-
-# region tense analysis
+nltk.download("punkt_tab")
+nltk.download("averaged_perceptron_tagger_eng")
 
 
 def analyze_sentence_tense(text, threshold=0.5):
+    """Analyze sentence tense with enhanced breakdown information."""
     text = text.replace("  ", "").replace("\n", " ").replace("\t", " ")
 
-    # Ensure required NLTK data is available
-    try:
-        nltk.data.find("taggers/averaged_perceptron_tagger")
-    except LookupError:
-        nltk.download("averaged_perceptron_tagger")
-        nltk.download("punkt")
+    verb_tenses = []
+    tense_details = {"past": 0, "present": 0, "unknown": 0}
+    why_unknown = ""
 
-    # Tokenize and POS tag the text
+    # Early return for unknown cases
+    if not text.strip():
+        return {
+            "tense": "unknown",
+            "breakdown": tense_details,
+            "breakdown_str": "",  # Empty for unknown
+            "has_mixed": False,
+            "percentages": {"past": 0, "present": 0, "unknown": 100},
+            "why_unknown": "empty_text",
+        }
+
+    # Add direct past tense indicators
+    text_lower = text.lower()
+    if "was" in text_lower or "were" in text_lower:
+        tense_details["past"] = 1
+        total_verbs = 1
+        return {
+            "tense": "past",
+            "breakdown": tense_details,
+            "breakdown_str": "past: 100%",
+            "has_mixed": False,
+            "percentages": {"past": 100, "present": 0, "unknown": 0},
+            "why_unknown": "",
+        }
+
+    def has_passive_voice(tagged):
+        """Check if sentence contains passive voice construction"""
+        for i, (word, tag) in enumerate(tagged):
+            if tag == "VBN":
+                if i > 0 and tagged[i - 1][0].lower() in [
+                    "was",
+                    "were",
+                    "is",
+                    "are",
+                    "be",
+                ]:
+                    return True
+                if i == 0:
+                    return True
+        return False
+
+    def is_patent_procedure(text, tagged):
+        procedure_starters = {
+            "prepared",
+            "obtained",
+            "synthesized",
+            "isolated",
+            "dissolved",
+            "mixed",
+            "combined",
+            "heated",
+            "cooled",
+            "filtered",
+            "purified",
+            "separated",
+        }
+
+        first_word = text.strip().split()[0].lower()
+        if first_word in procedure_starters:
+            return True
+
+        procedure_patterns = [
+            "according to",
+            "following the procedure",
+            "as described",
+            "using the method",
+            "following example",
+        ]
+        return any(pattern in text.lower() for pattern in procedure_patterns)
+
+    # Tokenize and POS tag
     tokens = word_tokenize(text)
     tagged = pos_tag(tokens)
 
-    verb_tenses = []
+    if has_passive_voice(tagged) or is_patent_procedure(text, tagged):
+        tense_details["past"] = 1
+        total_verbs = 1
+        return {
+            "tense": "past",
+            "breakdown": tense_details,
+            "breakdown_str": "past: 100%",
+            "has_mixed": False,
+            "percentages": {"past": 100, "present": 0, "unknown": 0},
+            "why_unknown": "",
+        }
 
-    # Time indicators (adverbs, phrases)
-    # future_time = {'tomorrow', 'soon', 'later', 'in the future'}
-    # past_time = {'yesterday', 'last', 'ago', 'previously', 'earlier'}
-    # present_time = {'now', 'currently', 'at the moment', 'as we speak'}
-
-    # Check for time-related words
-    text_lower = text.lower()
-    # if any(word in text_lower for word in future_time):
-    #     verb_tenses.append('Future')
-    # if any(word in text_lower for word in past_time):
-    #     verb_tenses.append('Past')
-    # if any(word in text_lower for word in present_time):
-    #     verb_tenses.append('Present')
-    if "was" in text_lower or "were" in text_lower:
-        return "past"
-
-    # Helper function to check for auxiliary/modal verbs
-    def has_auxiliary(aux_list):
-        return any(aux in text_lower for aux in aux_list)
-
-    # Iterate through words with their POS tags
+    # Process each verb
+    has_verbs = False
     for i, (word, tag) in enumerate(tagged):
-        if tag.startswith("VB"):  # Checking for verb forms
-            # Present Continuous: "is/are + VBG"
-            if tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["is", "are"]:
-                verb_tenses.append("Present")  ####
-
-            # Past Continuous: "was/were + VBG"
-            elif tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["was", "were"]:
-                verb_tenses.append("Present")
-
-            # Future Continuous: "will be + VBG"
-            elif (
-                tag == "VBG"
-                and i > 1
-                and tagged[i - 2][0].lower() == "will"
-                and tagged[i - 1][0].lower() == "be"
+        if tag.startswith("VB"):
+            has_verbs = True
+            tense = None
+            if tag == "VBD" or (
+                tag == "VBN" and i > 0 and tagged[i - 1][0].lower() in ["was", "were"]
             ):
-                verb_tenses.append("Present")
-
-            # "Going to" Future: "am/is/are going to + VB"
-            elif (
-                word.lower() == "going"
-                and i < len(tagged) - 1
-                and tagged[i + 1][0].lower() == "to"
+                tense = "past"
+            elif tag in ["VBP", "VBZ"] or (
+                tag == "VBG" and i > 0 and tagged[i - 1][0].lower() in ["is", "are"]
             ):
-                verb_tenses.append("Present")
+                tense = "present"
 
-            # Future Simple: "will + VB"
-            elif i > 0 and tagged[i - 1][0].lower() == "will":
-                verb_tenses.append("present")
+            if tense:
+                verb_tenses.append(tense)
+                tense_details[tense] += 1
 
-            # Past Simple: "baked", "traveled" (VBD)
-            elif tag == "VBD":
-                verb_tenses.append("Past")
+    if not has_verbs:
+        why_unknown = "no_verbs_found"
+        return {
+            "tense": "unknown",
+            "breakdown": tense_details,
+            "breakdown_str": "",  # Empty for unknown
+            "has_mixed": False,
+            "percentages": {"past": 0, "present": 0, "unknown": 100},
+            "why_unknown": why_unknown,
+        }
+    elif not verb_tenses:
+        why_unknown = "verbs_found_but_not_classified"
+        return {
+            "tense": "unknown",
+            "breakdown": tense_details,
+            "breakdown_str": "",  # Empty for unknown
+            "has_mixed": False,
+            "percentages": {"past": 0, "present": 0, "unknown": 100},
+            "why_unknown": why_unknown,
+        }
 
-            # Present Simple: "walks", "runs", "eats" (VBP, VBZ)
-            elif tag in ["VBP", "VBZ"]:
-                verb_tenses.append("Present")
-
-            # Past Participle: "was analyzed"
-            elif tag == "VBN" and has_auxiliary(["was", "were"]):
-                verb_tenses.append("Past")
-
-            # Present Perfect: "has analyzed"
-            elif tag == "VBN" and has_auxiliary(["has", "have"]):
-                verb_tenses.append("Present")
-
-            # Future Perfect: "will have analyzed"
-            elif tag == "VBN" and has_auxiliary(["will have"]):
-                verb_tenses.append("Present")
-
-    # If no tenses were found, return "unknown"
-    if not verb_tenses:
-        return "past"
-
-    # Use Counter to determine the most common tense
-    tense_counts = Counter(verb_tenses)
-    primary_tense = tense_counts.most_common(1)[0][0]
-
-    # Confidence calculation
-    total_verbs = sum(tense_counts.values())
-    confidence = tense_counts.most_common(1)[0][1] / total_verbs
+    # Calculate percentages for all tenses and create detailed breakdown
+    total_verbs = sum(tense_details.values())
     if total_verbs == 0:
-        return "past"
-    # if total_verbs<10:
-    #     print(primary_tense)
-    #     print(text)
+        return {
+            "tense": "unknown",
+            "breakdown": tense_details,
+            "breakdown_str": "",
+            "has_mixed": False,
+            "percentages": {"past": 0, "present": 0, "unknown": 100},
+            "why_unknown": "no_verbs_counted",
+        }
 
-    # If confidence is too low, return "unknown"
-    if confidence < threshold:
-        # print(primary_tense)
-        # print(text)
+    tense_percentages = {
+        tense: (count / total_verbs * 100) for tense, count in tense_details.items()
+    }
 
-        return "past"
+    # Create detailed breakdown string showing all percentages
+    breakdown_parts = []
+    for tense in ["past", "present"]:  # Order matters for consistency
+        if tense_percentages.get(tense, 0) > 0:
+            breakdown_parts.append(f"{tense}: {tense_percentages[tense]:.1f}%")
 
-    return primary_tense.lower()
+    breakdown_str = ", ".join(breakdown_parts) if breakdown_parts else ""
+
+    # Determine if mixed tense and create detailed description
+    significant_tenses = [
+        (tense, pct)
+        for tense, pct in tense_percentages.items()
+        if pct >= 20 and tense != "unknown"
+    ]
+    has_mixed_tenses = len(significant_tenses) > 1
+
+    # Create detailed mixed tense description
+    if has_mixed_tenses:
+        significant_tenses.sort(key=lambda x: x[1], reverse=True)  # Sort by percentage
+        breakdown_str = "Mixed: " + ", ".join(
+            f"{tense} {pct:.1f}%" for tense, pct in significant_tenses
+        )
+
+    return {
+        "tense": "unknown"
+        if not breakdown_parts
+        else max(tense_details.items(), key=lambda x: x[1])[0],
+        "breakdown": tense_details,
+        "breakdown_str": breakdown_str,
+        "has_mixed": has_mixed_tenses,
+        "percentages": tense_percentages,
+        "why_unknown": why_unknown,
+        "tense_distribution": significant_tenses if has_mixed_tenses else [],
+    }
 
 
-def check_tense_nltk(sentence):
-    words = word_tokenize(sentence)
-    tagged = pos_tag(words)
+def process_text_for_tense(input_tuple):
+    """Process a text tuple for tense analysis."""
+    idx, text = input_tuple
+    return (idx, analyze_sentence_tense(text))
 
-    past = ["VBD", "VBN"]
-    present = ["VB", "VBG", "VBP", "VBZ", "MD"]
 
-    tenses = {"past": 0, "present": 0}
-
-    for word, tag in tagged:
-        if tag in past:
-            tenses["past"] += 1
-        elif tag in present:
-            tenses["present"] += 1
-        elif word.lower() in ["will", "shall"]:
-            tenses["present"] += 1
-
-    return max(tenses, key=tenses.get) if max(tenses.values()) > 0 else "Unknown"
+def safe_join(content_list):
+    """Safely join content lists, handling both list and string inputs."""
+    if isinstance(content_list, list):
+        return " ".join(str(item) for item in content_list)
+    elif isinstance(content_list, str):
+        return content_list
+    return ""
 
 
 def dic_to_dic_w_tense_test(doc_w_exp, threshold=0):
+    """Process patent examples with detailed tense analysis."""
     dic = {}
-    pattern = r"\(\d+\)\s*([A-Za-z0-9\-\(\)\{\},:;=\[\]\+\*\s\.\^\$\%]+(?:\.(?:sup|delta|Hz|NMR)[^\)]*)?)"
+    optimal_workers = max(1, (multiprocessing.cpu_count() * 3) // 4)
 
-    for key, value in doc_w_exp.items():
-        tense_counts = {"past": 0, "present": 0, "unknown": 0}
+    with ProcessPoolExecutor(max_workers=optimal_workers) as executor:
+        for key, value in doc_w_exp.items():
+            tense_counts = {"past": 0, "present": 0, "unknown": 0}
+            mixed_tense_count = 0
+            total_examples = 0
 
-        if isinstance(value, list) and len(value) == 1:
-            desc = value[0]["title"] + "." + "".join(value[0]["content"])
-            if len(desc) > threshold:
-                tense = analyze_sentence_tense(desc)
-                if tense != "unknown":
-                    tense_counts[tense] += 1
-                else:
-                    matches = re.findall(pattern, desc)
-                    if matches:
-                        tense_counts["past"] += 1
-                    else:
-                        tense_counts["unknown"] += 1
+            if isinstance(value, list):
+                for example in value:
+                    if not isinstance(example, dict):
+                        continue
+
+                    title = example.get("title", "")
+                    content = example.get("content", [])
+                    desc = title + "." + safe_join(content)
+
+                    if len(desc) > threshold:
+                        total_examples += 1
+
+                texts_to_analyze = []
+                for i, example in enumerate(value):
+                    if not isinstance(example, dict):
+                        continue
+
+                    title = example.get("title", "")
+                    content = example.get("content", [])
+                    desc = title + "." + safe_join(content)
+
+                    if len(desc) > threshold:
+                        texts_to_analyze.append((i, desc))
+
+                if texts_to_analyze:
+                    results = list(
+                        executor.map(process_text_for_tense, texts_to_analyze)
+                    )
+
+                    for idx, tense_analysis in results:
+                        if idx >= len(value):
+                            continue
+
+                        example = value[idx]
+                        if not isinstance(example, dict):
+                            continue
+
+                        example["tense"] = tense_analysis["tense"]
+                        example["tense_breakdown"] = tense_analysis["breakdown_str"]
+                        example["why_unknown"] = tense_analysis.get("why_unknown", "")
+
+                        # Add percentages to example
+                        example["past_percentage"] = tense_analysis["percentages"][
+                            "past"
+                        ]
+                        example["present_percentage"] = tense_analysis["percentages"][
+                            "present"
+                        ]
+                        example["unknown_percentage"] = tense_analysis["percentages"][
+                            "unknown"
+                        ]
+
+                        tense_counts[tense_analysis["tense"]] += 1
+                        if tense_analysis["has_mixed"]:
+                            mixed_tense_count += 1
+
+            if total_examples > 0:
                 dic[key] = tense_counts
-
-        elif isinstance(value, list) and len(value) > 1:
-            for ls in value:
-                desc = ls["title"] + "." + "".join(ls["content"])
-                if len(desc) > threshold:
-                    if len(desc) > 0:
-                        tense = analyze_sentence_tense(desc)
-
-                        if tense != "unknown":
-                            tense_counts[tense] += 1
-                        else:
-                            matches = re.findall(pattern, desc)
-                            if matches:
-                                tense_counts["past"] += 1
-                            else:
-                                tense_counts["unknown"] += 1
-            dic[key] = tense_counts
-
-        # elif isinstance(value, dict):
-        #     print(value)
-        #     for ex, desc in value.items():
-        #         if len(desc) > threshold:
-        #             tense = analyze_sentence_tense(desc)
-        #             if tense != "unknown":
-        #                 tense_counts[tense] += 1
-        #             else:
-        #                 matches = re.findall(pattern, desc)
-        #                 if matches:
-        #                     tense_counts["past"] += 1
-        #                 else:
-        #                     tense_counts["unknown"] += 1
-        #     dic[key] = tense_counts
-        # else:
-        #     print(type(value))
-        #     print(value)
-        #     print(key)
+                mixed_tense_percentage = mixed_tense_count / total_examples * 100
+                dic[key]["mixed_tense_percentage"] = f"{round(mixed_tense_percentage)}%"
 
     return dic
 
 
-# region NLP Processing
 def clean_text(text):
     """
     Clean text by removing special characters, extra spaces, and normalizing content
