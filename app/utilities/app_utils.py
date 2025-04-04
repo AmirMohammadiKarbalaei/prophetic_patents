@@ -4,9 +4,9 @@ import zipfile
 from lxml import etree
 from tqdm import tqdm
 import re
-from .nlp_processing import dic_to_dic_w_tense_test
-from .database_utils import store_patent_examples, store_patent_statistics
-from .utils_clean import (
+from nlp_processing import dic_to_dic_w_tense_test
+from database_utils import store_patent_examples, store_patent_statistics
+from utils_clean import (
     remove_duplicate_docs,
 )
 import argparse
@@ -14,7 +14,7 @@ import time
 import asyncio
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import aiofiles
-from .patent_processor import PatentProcessor
+from patent_processor import PatentProcessor
 import multiprocessing  # Add this import
 
 
@@ -426,8 +426,11 @@ async def create_processing_pipeline(
 
         # Extract year from filename if not provided
         file_year = year
-        if not file_year and file_name.startswith("ipg"):
-            year_match = re.match(r"ipg(\d{2})\d{4}\.xml", file_name)
+        if not file_year:
+            if file_name.startswith("ipg"):
+                year_match = re.match(r"ipg(\d{2})\d{4}\.xml", file_name)
+            elif file_name.startswith("ipa"):
+                year_match = re.match(r"ipa(\d{2})\d{4}\.xml", file_name)
             if year_match:
                 two_digit_year = int(year_match.group(1))
                 file_year = (
