@@ -8,6 +8,9 @@ from utilities.app_utils import (
     validate_year,
     validate_kind,
 )
+import pandas as pd
+from sqlalchemy import create_engine, text
+
 # # Process a single year
 # python patent_cli.py --year 2020 --kind grant
 
@@ -25,6 +28,24 @@ from utilities.app_utils import (
 
 # # Specify output directory and number of workers
 # python patent_cli.py --year 2020 --output-dir ./patent_data --workers 6
+
+
+def save_to_csv(output_dir, year=None):
+    """Save database tables to CSV files."""
+    engine = create_engine("sqlite:///patent_database.db")
+    tables = ["patents", "claims", "descriptions"]
+
+    csv_dir = os.path.join(output_dir, "csv_exports")
+    os.makedirs(csv_dir, exist_ok=True)
+
+    year_suffix = f"_{year}" if year else ""
+    for table in tables:
+        query = f"SELECT * FROM {table}"
+        if year:
+            query += f" WHERE year = {year}"
+        df = pd.read_sql(query, engine)
+        csv_path = os.path.join(csv_dir, f"{table}{year_suffix}.csv")
+        df.to_csv(csv_path, index=False)
 
 
 def process_year(year, kind, base_path, status_callback=None, stop_event=None):
@@ -66,6 +87,11 @@ def process_year(year, kind, base_path, status_callback=None, stop_event=None):
             max_workers=4,
             year=year,
         )
+
+        # Save to CSV after processing
+        if status_callback:
+            status_callback(f"Saving data to CSV files for year {year}")
+        save_to_csv(base_path, year)
 
         if status_callback:
             status_callback(f"Processing complete for year {year}")
@@ -161,6 +187,8 @@ def main():
                 stop_event=stop_event,
                 max_workers=args.workers,
             )
+            print("Saving all data to CSV files")
+            save_to_csv(args.output_dir)
             return
 
         # Process years
