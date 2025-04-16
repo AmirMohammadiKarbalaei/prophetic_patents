@@ -4,6 +4,7 @@ import os
 import threading
 import queue
 import sqlite3
+import csv
 import multiprocessing
 from multiprocessing import freeze_support, Event as MPEvent
 from utilities.app_utils import (
@@ -268,13 +269,18 @@ class PatentDownloaderGUI:
             row=12, column=0, columnspan=2, pady=10, sticky=tk.N + tk.S + tk.E + tk.W
         )
 
+        # Add Export All Tables button
+        ttk.Button(
+            main_frame, text="Export All Tables to CSV", command=self.export_all_tables
+        ).grid(row=13, column=0, columnspan=2, pady=5, sticky=tk.N + tk.S + tk.E + tk.W)
+
         # Add an entry to set the number of rows to display
         ttk.Label(main_frame, text="Rows to Display:").grid(
-            row=13, column=0, sticky=tk.E, pady=5
+            row=14, column=0, sticky=tk.E, pady=5
         )
         self.rows_to_display = tk.StringVar(value="10")
         ttk.Entry(main_frame, textvariable=self.rows_to_display, width=6).grid(
-            row=13, column=1, sticky=tk.W, pady=5
+            row=14, column=1, sticky=tk.W, pady=5
         )
 
         self.log_queue = queue.Queue()
@@ -1348,6 +1354,49 @@ class PatentDownloaderGUI:
 
         except Exception as e:
             self.update_log(f"Error exporting data: {str(e)}")
+
+    def export_all_tables(self):
+        """Export all database tables to CSV files."""
+        try:
+            # Ask for directory to save files
+            save_dir = filedialog.askdirectory(
+                title="Select Directory to Save CSV Files"
+            )
+            if not save_dir:
+                return
+
+            tables = ["patent_examples", "patent_statistics"]
+            with sqlite3.connect("./db/patents.db") as conn:
+                cursor = conn.cursor()
+
+                for table_name in tables:
+                    file_path = os.path.join(save_dir, f"{table_name}.csv")
+
+                    # Get column names
+                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    columns = [col[1] for col in cursor.fetchall()]
+
+                    # Get all data
+                    cursor.execute(f"SELECT * FROM {table_name}")
+                    rows = cursor.fetchall()
+
+                    # Write to CSV
+                    with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
+                        writer = csv.writer(csvfile)
+                        writer.writerow(columns)  # Write header
+                        writer.writerows(rows)  # Write data
+
+                    self.update_log(f"Exported {table_name} to {file_path}")
+
+            self.update_log("All tables exported successfully!")
+            messagebox.showinfo(
+                "Success", "All tables have been exported successfully!"
+            )
+
+        except Exception as e:
+            error_msg = f"Error exporting tables: {str(e)}"
+            self.update_log(error_msg)
+            messagebox.showerror("Error", error_msg)
 
     def sort_treeview(self, tree, column, reverse):
         """Sort treeview data by a column."""
