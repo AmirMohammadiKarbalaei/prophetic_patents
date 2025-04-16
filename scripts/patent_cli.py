@@ -1,7 +1,7 @@
 import argparse
 import os
 import multiprocessing
-from app_utils import (
+from utilities.app_utils import (
     download_patents_pto,
     unzip_files,
     extract_and_save_examples_in_db,

@@ -3,7 +3,7 @@ import asyncio
 from bs4 import BeautifulSoup
 import re
 import multiprocessing
-from utils_clean import (
+from .utils_clean import (
     remove_leadiong_zeros,
     find_doc_number,
     extract_experiments_w_heading,

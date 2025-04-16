@@ -1,5 +1,5 @@
 import os
-from utilities.utils_clean import find_doc_number, read_xlsb_file, save_as_pickle
+from .utils_clean import find_doc_number, read_xlsb_file, save_as_pickle
 
 
 def remove_leadiong_zeros(s):
