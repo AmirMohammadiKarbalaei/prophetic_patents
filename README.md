@@ -10,7 +10,7 @@ This tool provides both a graphical user interface (GUI) and command-line interf
 
 ## Components
 
-### [GUI Application (USPTO_Patent_Analyser.py)](https://drive.google.com/file/d/1ssNa_78WTYcU7UI5iNjL9uodqxk5rMqh/view?usp=sharing)
+### [GUI Application (USPTO_Patent_Analyser.py)](https://drive.google.com/file/d/1Dx9eSOApGypDGTTVP4plUuvdMd44mXK-/view?usp=sharing)
 The graphical interface provides:
 - Interactive application for patent analysis and processing
 - Automated yearly patent file downloading and unzipping from USPTO
@@ -42,7 +42,7 @@ The CLI tool enables:
 ## Usage
 
 ### USPTO_Patent_Analyser
-The applciation can be accessed from: [USPTO_Patent_Analyser](https://drive.google.com/file/d/1ssNa_78WTYcU7UI5iNjL9uodqxk5rMqh/view?usp=sharing)
+The applciation can be accessed from: [USPTO_Patent_Analyser](https://drive.google.com/file/d/1Dx9eSOApGypDGTTVP4plUuvdMd44mXK-/view?usp=sharing)
 
 ### GUI Application
 To launch the GUI:
