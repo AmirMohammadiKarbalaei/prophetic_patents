@@ -32,8 +32,8 @@ from sqlalchemy import create_engine, text
 
 def save_to_csv(output_dir, year=None):
     """Save database tables to CSV files."""
-    engine = create_engine("sqlite:///patent_database.db")
-    tables = ["patents", "claims", "descriptions"]
+    engine = create_engine("sqlite:///./db/patents.db")
+    tables = ["patent_examples", "patent_statistics"]
 
     csv_dir = os.path.join(output_dir, "csv_exports")
     os.makedirs(csv_dir, exist_ok=True)
